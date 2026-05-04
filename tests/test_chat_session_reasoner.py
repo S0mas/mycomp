@@ -81,7 +81,8 @@ class TestPrepareAndInstructions:
         r = ChatSessionReasoner(exchange_root=exchange_dir)
         assert r.print_instructions() == ""
 
-    def test_stale_files_cleaned(self, exchange_dir, person_alice):
+    def test_prepare_does_not_clean_exchange_files(self, exchange_dir, person_alice):
+        """prepare_person should NOT delete exchange files — think() manages those."""
         pdir = exchange_dir / "alice"
         pdir.mkdir(parents=True)
         (pdir / "WAITING").write_text("stale")
@@ -91,9 +92,10 @@ class TestPrepareAndInstructions:
         r = ChatSessionReasoner(exchange_root=exchange_dir)
         r.prepare_person(person_alice)
 
-        assert not (pdir / "WAITING").exists()
-        assert not (pdir / "request.json").exists()
-        assert not (pdir / "response.txt").exists()
+        # Files are preserved (think() cleans them, not prepare)
+        assert (pdir / "WAITING").exists()
+        assert (pdir / "request.json").exists()
+        assert (pdir / "response.txt").exists()
 
 
 class TestThink:

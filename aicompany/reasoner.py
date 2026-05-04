@@ -127,9 +127,8 @@ class ChatSessionReasoner:
         """Create exchange dir, write persona card and loop.py for a person."""
         pdir = self._root / person.id
         pdir.mkdir(parents=True, exist_ok=True)
-        # Clean stale files
-        for f in ("request.json", "response.txt", "WAITING"):
-            (pdir / f).unlink(missing_ok=True)
+        # Don't clean request/response/WAITING — think() manages those.
+        # Only overwrite persona and loop script.
         # Write persona card
         persona_card = self._build_persona_card(person, skill_registry)
         (pdir / "persona.md").write_text(persona_card, encoding="utf-8")

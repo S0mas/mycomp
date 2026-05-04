@@ -182,6 +182,7 @@ def save_plan(plan: ProjectPlan) -> None:
 def save_output(project_id: str, task_id: str, content: str) -> str:
     filename = f"{task_id}.md"
     path = project_dir(project_id) / "outputs" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return str(path.relative_to(project_dir(project_id)))
 
@@ -213,6 +214,7 @@ def save_decision(project_id: str, task_id: str, record: dict) -> None:
     if record.get("modified_instructions"):
         lines += ["## Modified instructions", "", record["modified_instructions"], ""]
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
