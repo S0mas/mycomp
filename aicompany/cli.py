@@ -295,21 +295,7 @@ def cmd_new_project(requirements_file: str):
         _print_info(f"Fix the requirements and re-run:  python main.py new-project {requirements_file}")
         raise SystemExit(1)
 
-    while True:
-        choice = click.prompt(
-            click.style("\n[P]roceed / [E]dit requirements / [C]ancel", fg="cyan"),
-            type=click.Choice(["p", "e", "c", "P", "E", "C"], case_sensitive=False),
-            show_choices=False,
-        ).lower()
-
-        if choice == "c":
-            _print_warn("Cancelled by user.")
-            return
-        elif choice == "e":
-            _print_info(f"Edit the file and re-run:  python main.py new-project {requirements_file}")
-            return
-        elif choice == "p":
-            break
+    _print_ok("Requirements passed evaluation — proceeding.")
 
     # ── CTO planning ──────────────────────────────────────────────────────────
     click.echo("  → CTO is analysing requirements...")
