@@ -9,7 +9,7 @@ What we verify:
   - build_prompt() composes structured context correctly
 """
 import pytest
-from aicompany.models import CompanyState, Person, ProjectPlan, Skill, Task, Team, build_prompt
+from aicompany.models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team, build_prompt
 
 
 class TestSkill:
@@ -203,3 +203,27 @@ class TestProjectPlan:
         assert p.tasks == []
         assert p.tech_stack == []
         assert p.decisions_log == []
+
+
+class TestRequirementsEvaluation:
+    def test_overall_score(self):
+        ev = RequirementsEvaluation(clarity=4, completeness=3, feasibility=5,
+                                    risks=[], suggestions=[], summary="ok", verdict="proceed")
+        assert ev.overall_score == 4.0
+
+    def test_has_risks(self):
+        ev = RequirementsEvaluation(clarity=3, completeness=3, feasibility=3,
+                                    risks=["risk1"], suggestions=[], summary="", verdict="needs_work")
+        assert ev.has_risks is True
+
+    def test_no_risks(self):
+        ev = RequirementsEvaluation(clarity=3, completeness=3, feasibility=3,
+                                    risks=[], suggestions=[], summary="", verdict="proceed")
+        assert ev.has_risks is False
+
+    def test_from_dict(self):
+        d = {"clarity": 4, "completeness": 5, "feasibility": 3,
+             "risks": ["r"], "suggestions": ["s"], "summary": "sum", "verdict": "proceed"}
+        ev = RequirementsEvaluation.from_dict(d)
+        assert ev.clarity == 4
+        assert ev.risks == ["r"]

@@ -225,3 +225,38 @@ class ProjectPlan:
             if t.id == task_id:
                 return t
         return None
+
+
+@dataclass
+class RequirementsEvaluation:
+    """Structured assessment of a requirements document before planning."""
+    clarity: int            # 1-5: how clear and unambiguous
+    completeness: int       # 1-5: how complete (covers scope, constraints, acceptance criteria)
+    feasibility: int        # 1-5: how realistic given current company capabilities
+    risks: list = field(default_factory=list)         # list of risk strings
+    suggestions: list = field(default_factory=list)    # list of improvement suggestions
+    summary: str = ""       # one-paragraph overall assessment
+    verdict: str = "proceed"  # "proceed" | "needs_work" | "reject"
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RequirementsEvaluation":
+        return cls(
+            clarity=d.get("clarity", 3),
+            completeness=d.get("completeness", 3),
+            feasibility=d.get("feasibility", 3),
+            risks=d.get("risks", []),
+            suggestions=d.get("suggestions", []),
+            summary=d.get("summary", ""),
+            verdict=d.get("verdict", "proceed"),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @property
+    def overall_score(self) -> float:
+        return (self.clarity + self.completeness + self.feasibility) / 3.0
+
+    @property
+    def has_risks(self) -> bool:
+        return len(self.risks) > 0

@@ -117,6 +117,12 @@ class TestInit:
 
 # ── new-project ────────────────────────────────────────────────────────────────
 
+MOCK_EVAL_RESPONSE = {
+    "clarity": 4, "completeness": 4, "feasibility": 5,
+    "risks": [], "suggestions": [], "summary": "Looks good.", "verdict": "proceed",
+}
+
+
 class TestNewProject:
     def _run_new_project(self, runner, requirements_file, cto_response=None, hr_response=None):
         cto_resp = cto_response or MOCK_PLAN_RESPONSE
@@ -125,7 +131,8 @@ class TestNewProject:
         with patch("aicompany.cli.llm") as mock_llm:
             mock_llm.cto_analyze.return_value = cto_resp
             mock_llm.hr_create_team.return_value = hr_response or MOCK_TEAM_RESPONSE
-            result = runner.invoke(cli, ["new-project", requirements_file])
+            mock_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
+            result = runner.invoke(cli, ["new-project", requirements_file], input="p\n")
         return result, mock_llm
 
     def test_exits_zero(self, runner, requirements_file):

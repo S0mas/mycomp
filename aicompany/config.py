@@ -14,6 +14,9 @@ MODEL = os.environ.get("AICOMPANY_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS_CTO = 4096
 MAX_TOKENS_HR = 2048
 MAX_TOKENS_TEAM = 8096
+MAX_TOKENS_EVAL = 2048
+
+MIN_REQUIREMENTS_LENGTH = 20  # characters — below this, reject as too vague
 
 
 def require_api_key() -> str:

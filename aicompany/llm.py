@@ -98,6 +98,67 @@ def cto_analyze(requirements_text: str, company_state_yaml: str) -> dict:
     return _extract_json_block(text)
 
 
+# ── Requirements evaluation ───────────────────────────────────────────────────
+
+_EVAL_SYSTEM = """\
+You are a senior Business Analyst at an AI-driven software company. Your job is to
+evaluate client requirements documents BEFORE they go to the CTO for planning.
+
+Score each dimension from 1 (very poor) to 5 (excellent):
+- **clarity**: Are the requirements clear and unambiguous? Can an engineer read them and know exactly what to build?
+- **completeness**: Do they cover scope, constraints, acceptance criteria, edge cases? Or are major pieces missing?
+- **feasibility**: Given that an AI team of coders and reviewers will implement this, is the scope realistic for a single project?
+
+Identify specific **risks** — things that could cause the project to fail, stall, or deliver the wrong thing.
+
+Provide actionable **suggestions** — specific improvements the client could make to the requirements.
+
+Set **verdict** to:
+- "proceed" — requirements are good enough to plan (scores mostly 3+, no critical risks)
+- "needs_work" — requirements have gaps that should be fixed first (any score below 3, or critical risks)
+- "reject" — requirements are fundamentally unsuitable (incoherent, empty, or not a software project)
+
+Output ONLY a JSON block (```json ... ```) with EXACTLY this schema — no prose:
+
+```json
+{
+  "clarity": 4,
+  "completeness": 3,
+  "feasibility": 5,
+  "risks": [
+    "No authentication requirements specified — security gap",
+    "Database choice not mentioned — may cause rework"
+  ],
+  "suggestions": [
+    "Add acceptance criteria for each feature",
+    "Specify target deployment environment"
+  ],
+  "summary": "One paragraph overall assessment of the requirements.",
+  "verdict": "proceed"
+}
+```\
+"""
+
+
+def evaluate_requirements(requirements_text: str, company_state_yaml: str) -> dict:
+    """Evaluate requirements before CTO planning. Returns evaluation dict."""
+    user = f"""\
+## Client Requirements to Evaluate
+
+{requirements_text}
+
+## Current Company Capabilities (YAML)
+
+```yaml
+{company_state_yaml}
+```
+
+Evaluate these requirements. Be honest and constructive.
+"""
+    text = _call(_EVAL_SYSTEM, user, config.MAX_TOKENS_EVAL)
+    return _extract_json_block(text)
+
+
 # ── HR ─────────────────────────────────────────────────────────────────────────
 
 _HR_SYSTEM = """\

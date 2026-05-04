@@ -5,7 +5,8 @@ import click
 import yaml
 
 from . import config, llm, orchestrator, registry
-from .models import CompanyState, Person, ProjectPlan, Skill, Task, Team
+from .models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team
+from .validation import ValidationError, validate_requirements_text, validate_cto_plan, validate_hr_response
 
 
 def _print_ok(msg: str) -> None:
@@ -212,6 +213,35 @@ def cmd_init():
 
 # ── new-project ────────────────────────────────────────────────────────────────
 
+def _score_color(score: int) -> str:
+    if score >= 4:
+        return "green"
+    elif score >= 3:
+        return "yellow"
+    return "red"
+
+
+def _print_evaluation(ev: RequirementsEvaluation) -> None:
+    click.echo()
+    click.echo(click.style("  ── Requirements Evaluation ──", bold=True))
+    for label, score in [("Clarity", ev.clarity), ("Completeness", ev.completeness), ("Feasibility", ev.feasibility)]:
+        bar = "█" * score + "░" * (5 - score)
+        click.echo(click.style(f"  {label:>14}: {bar} {score}/5", fg=_score_color(score)))
+    click.echo(click.style(f"  {'Overall':>14}: {ev.overall_score:.1f}/5", bold=True))
+    click.echo()
+    click.echo(f"  Summary: {ev.summary}")
+    if ev.has_risks:
+        click.echo(click.style("  Risks:", fg="yellow"))
+        for r in ev.risks:
+            click.echo(click.style(f"    • {r}", fg="yellow"))
+    if ev.suggestions:
+        click.echo(click.style("  Suggestions:", fg="cyan"))
+        for s in ev.suggestions:
+            click.echo(click.style(f"    • {s}", fg="cyan"))
+    verdict_color = {"proceed": "green", "needs_work": "yellow", "reject": "red"}.get(ev.verdict, "white")
+    click.echo(click.style(f"  Verdict: {ev.verdict.upper()}", fg=verdict_color, bold=True))
+
+
 @click.command("new-project")
 @click.argument("requirements_file", type=click.Path(exists=True))
 def cmd_new_project(requirements_file: str):
@@ -219,13 +249,51 @@ def cmd_new_project(requirements_file: str):
     req_path = Path(requirements_file)
     requirements_text = req_path.read_text(encoding="utf-8")
 
+    # ── Sanity checks ─────────────────────────────────────────────────────────
+    errors = validate_requirements_text(requirements_text)
+    if errors:
+        for e in errors:
+            _print_err(e)
+        raise SystemExit(1)
+
     click.echo(f"\nAnalysing requirements: {req_path.name}")
 
     state = registry.load_state()
     state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
 
+    # ── Evaluate requirements ─────────────────────────────────────────────────
+    click.echo("  → Evaluating requirements quality...")
+    eval_dict = llm.evaluate_requirements(requirements_text, state_yaml)
+    evaluation = RequirementsEvaluation.from_dict(eval_dict)
+
+    _print_evaluation(evaluation)
+
+    while True:
+        choice = click.prompt(
+            click.style("\n[P]roceed / [E]dit requirements / [C]ancel", fg="cyan"),
+            type=click.Choice(["p", "e", "c", "P", "E", "C"], case_sensitive=False),
+            show_choices=False,
+        ).lower()
+
+        if choice == "c":
+            _print_warn("Cancelled by user.")
+            return
+        elif choice == "e":
+            _print_info(f"Edit the file and re-run:  python main.py new-project {requirements_file}")
+            return
+        elif choice == "p":
+            break
+
+    # ── CTO planning ──────────────────────────────────────────────────────────
     click.echo("  → CTO is analysing requirements...")
     plan_dict = llm.cto_analyze(requirements_text, state_yaml)
+
+    plan_errors = validate_cto_plan(plan_dict)
+    if plan_errors:
+        _print_warn("CTO plan has issues:")
+        for e in plan_errors:
+            _print_err(f"  {e}")
+        _print_warn("Proceeding with best-effort plan...")
 
     title = plan_dict.get("title", "Untitled Project")
     tech_stack = plan_dict.get("tech_stack", [])
@@ -251,6 +319,13 @@ def cmd_new_project(requirements_file: str):
         team_data = result.get("team", result)
         persons_data = result.get("persons", [])
         skills_data = result.get("skills", [])
+
+        hr_errors = validate_hr_response(result, team_id)
+        if hr_errors:
+            _print_warn(f"  HR response for '{team_id}' has issues:")
+            for e in hr_errors:
+                _print_err(f"    {e}")
+            _print_warn("  Proceeding with best-effort team...")
 
         team_data["id"] = team_id
         team = Team.from_dict(team_data)
