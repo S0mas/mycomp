@@ -73,10 +73,19 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
 
     sorted_tasks = _topological_sort(plan.tasks)
     completed_ids = {t.id for t in plan.tasks if t.status == "done"}
+    failed_ids = {t.id for t in plan.tasks if t.status == "failed"}
 
     for task in sorted_tasks:
         if task.status == "done":
             print(f"  [skip] {task.id}: {task.title} (already done)")
+            continue
+
+        # Propagate failure — skip tasks whose dependency was rejected/failed
+        if any(dep in failed_ids for dep in task.depends_on):
+            print(f"  [skip] {task.id}: dependency failed or was rejected")
+            task.status = "failed"
+            failed_ids.add(task.id)
+            registry.save_plan(plan)
             continue
 
         if not all(dep in completed_ids for dep in task.depends_on):
@@ -104,6 +113,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
 
             if action == "rejected":
                 task.status = "failed"
+                failed_ids.add(task.id)
                 registry.save_plan(plan)
                 print(f"  [skip] {task.id}: rejected by user")
                 continue
@@ -113,6 +123,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
 
         if dry_run:
             print(f"  [dry-run] Would execute: {task.id} — {task.title} (team: {task.assigned_team})")
+            completed_ids.add(task.id)  # track as done so downstream dep checks pass
             continue
 
         # Load team and execute

@@ -2,3 +2,7 @@ anthropic>=0.25.0
 PyYAML>=6.0
 click>=8.0
 rich>=13.0
+
+# testing
+pytest>=8.0
+pytest-mock>=3.12
