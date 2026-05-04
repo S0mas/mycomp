@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -11,6 +12,7 @@ PROJECTS_DIR = BASE_DIR / "projects"
 
 MODEL = os.environ.get("AICOMPANY_MODEL", "claude-sonnet-4-6")
 LLM_BACKEND = os.environ.get("AICOMPANY_LLM_BACKEND", "anthropic")
+MCP_SERVERS: list[dict] = json.loads(os.environ.get("AICOMPANY_MCP_SERVERS", "[]"))
 
 MAX_TOKENS_CTO = 4096
 MAX_TOKENS_HR = 2048

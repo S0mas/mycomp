@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""
+Worker script for {name} (id: {pid}, role: {role}).
+Non-blocking poll/submit commands for the chat session protocol.
+
+Usage:
+    python3 worker.py identity   -- print persona card
+    python3 worker.py poll       -- claim READY signal, print request
+    python3 worker.py submit     -- read stdin, atomically write response.txt
+"""
+import json
+import sys
+from pathlib import Path
+
+EXCHANGE_DIR = Path("{exchange_dir}")
+PERSON_NAME = "{name}"
+PERSON_ID = "{pid}"
+PERSON_ROLE = "{role}"
+
+_PERSONA = """{persona}"""
+
+
+def cmd_identity():
+    print(_PERSONA)
+
+
+def cmd_poll():
+    ready = EXCHANGE_DIR / "READY"
+    request_file = EXCHANGE_DIR / "request.json"
+    if not ready.exists():
+        print("NO_WORK")
+        return
+    try:
+        ready.unlink()
+    except FileNotFoundError:
+        print("NO_WORK")
+        return
+    if not request_file.exists():
+        print("NO_WORK")
+        return
+    data = json.loads(request_file.read_text(encoding="utf-8"))
+    print("=== SYSTEM PROMPT ===")
+    print(data.get("system", ""))
+    print("")
+    print("=== USER PROMPT ===")
+    print(data.get("user", ""))
+    print("")
+    print("--- Run: python3 worker.py submit << 'EOF' ---")
+
+
+def cmd_submit():
+    response = sys.stdin.read()
+    tmp = EXCHANGE_DIR / "response.tmp"
+    final = EXCHANGE_DIR / "response.txt"
+    tmp.write_text(response, encoding="utf-8")
+    tmp.rename(final)
+    print(f"[{{PERSON_NAME}}] Response submitted.")
+
+
+COMMANDS = {{"identity": cmd_identity, "poll": cmd_poll, "submit": cmd_submit}}
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print("Usage: python3 worker.py identity|poll|submit")
+        sys.exit(1)
+    COMMANDS[sys.argv[1]]()
+
+
+if __name__ == "__main__":
+    main()

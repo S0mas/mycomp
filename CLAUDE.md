@@ -15,6 +15,9 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 - `AICOMPANY_LLM_BACKEND` — optional, defaults to `anthropic` (pluggable: any backend implementing `LLMBackend` protocol)
 - `AICOMPANY_MODEL` — optional, defaults to `claude-sonnet-4-6`
 - `ANTHROPIC_API_KEY` — required when using the `anthropic` backend
+- `AICOMPANY_MCP_SERVERS` — optional, JSON array of MCP server objects for the Anthropic backend (default: `[]`, MCP disabled)
+  - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/sse","name":"mycomp"}]`
+  - Start the MCP server: `./scripts/start_mcp.sh` (starts server + cloudflare tunnel, prints public URL)
 
 ---
 
@@ -72,7 +75,8 @@ aicompany/          core package
   oversight.py      human checkpoint (Approve/Reject/Modify)
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
-tests/              pytest suite — 190 tests, all mocked
+  mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
+tests/              pytest suite — 196 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen

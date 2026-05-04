@@ -20,3 +20,6 @@ company/teams/
 projects/
 reqs*.md
 tmp/
+
+# cloudflared tunnel binary (downloaded, not committed)
+cloudflared

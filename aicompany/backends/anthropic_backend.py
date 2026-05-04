@@ -5,13 +5,18 @@ import os
 
 import anthropic
 
+from aicompany import config
 from aicompany.llm_backend import register_backend
 
 
 class AnthropicBackend:
-    """LLM backend using the Anthropic Messages API."""
+    """LLM backend using the Anthropic Messages API.
 
-    def __init__(self) -> None:
+    Uses client.beta.messages.create() with mcp-client-2025-04-04 when
+    mcp_servers is non-empty; otherwise plain client.messages.create().
+    """
+
+    def __init__(self, mcp_servers: list[dict] | None = None) -> None:
         key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not key:
             raise EnvironmentError(
@@ -19,8 +24,21 @@ class AnthropicBackend:
                 "Export it or add it to .env before using the Anthropic backend."
             )
         self._client = anthropic.Anthropic()
+        self._mcp_servers: list[dict] = (
+            mcp_servers if mcp_servers is not None else config.MCP_SERVERS
+        )
 
     def call(self, system: str, user: str, max_tokens: int, model: str) -> str:
+        if self._mcp_servers:
+            response = self._client.beta.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                mcp_servers=self._mcp_servers,
+                betas=["mcp-client-2025-04-04"],
+            )
+            return "\n".join(b.text for b in response.content if hasattr(b, "text"))
         response = self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
