@@ -14,3 +14,4 @@ except Exception:
     pass
 
 from . import fake_backend  # noqa: F401  — always available, no dependencies
+from . import chat_session_backend  # noqa: F401  — always available, no dependencies
