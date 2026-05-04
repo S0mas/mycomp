@@ -154,7 +154,7 @@ class TestThink:
         t.join()
 
     def test_think_timeout(self, exchange_dir, person_alice, monkeypatch):
-        import aicompany.reasoner as mod
+        import aicompany.backends.chat_session_backend as mod
         monkeypatch.setattr(mod, "_TIMEOUT", 0.5)
         monkeypatch.setattr(mod, "_POLL_INTERVAL", 0.1)
 
