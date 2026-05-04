@@ -88,14 +88,15 @@ class ChatSessionReasoner:
     Reasoner for interactive chat sessions (e.g. multiple Claude tabs).
 
     Each Person gets their own exchange directory under ``exchange_root/{person_id}/``.
-    Before the session starts, call ``print_instructions()`` to tell the user
-    which tabs to open and what to paste into each.
+    The AI uses non-blocking commands to interact:
+      - ``python3 worker.py poll``   — claims work, prints request, exits
+      - ``python3 worker.py submit`` — reads stdin, atomically writes response
 
-    File protocol per person dir:
-        persona.md     — written once; describes who this agent is
-        request.json   — written by orchestrator when it needs a response
-        WAITING        — signal that a request is pending
-        response.txt   — written by the chat AI; orchestrator reads and deletes
+    Atomic protocol (race-free):
+      1. Orchestrator writes request.json, then atomically creates READY (tmp+rename)
+      2. AI runs poll → deletes READY (claims), reads request.json, prints it
+      3. AI runs submit → writes .tmp, renames to response.txt (atomic)
+      4. Orchestrator sees response.txt, reads it, cleans up
     """
 
     def __init__(self, exchange_root: Path | None = None) -> None:
@@ -132,9 +133,9 @@ class ChatSessionReasoner:
         # Write persona card
         persona_card = self._build_persona_card(person, skill_registry)
         (pdir / "persona.md").write_text(persona_card, encoding="utf-8")
-        # Write the monitoring loop script
-        loop_script = self._build_loop_script(person, pdir, skill_registry)
-        (pdir / "loop.py").write_text(loop_script, encoding="utf-8")
+        # Write the worker script (poll/submit)
+        worker_script = self._build_worker_script(person, pdir, skill_registry)
+        (pdir / "worker.py").write_text(worker_script, encoding="utf-8")
         self._prepared_persons[person.id] = person
         return pdir
 
@@ -162,14 +163,22 @@ class ChatSessionReasoner:
             "=" * 70,
             "",
             f"  Open {len(self._prepared_persons)} separate AI chat tab(s).",
-            f"  Tell each AI to run its loop.py script (it prints identity + rules on startup).",
+            f"  Each AI uses worker.py (non-blocking poll/submit commands).",
+            "",
+            "  Protocol per AI tab:",
+            "    1. python3 <dir>/worker.py identity   — see who you are",
+            "    2. python3 <dir>/worker.py poll       — check for work (repeat until not NO_WORK)",
+            "    3. python3 <dir>/worker.py submit << 'EOF'",
+            "       ...response...",
+            "       EOF",
+            "    4. Repeat from step 2.",
             "",
         ]
 
         for i, (pid, person) in enumerate(self._prepared_persons.items(), 1):
             pdir = self._root / pid
             lines.append(f"  Tab {i}: {person.name} ({person.role})")
-            lines.append(f"    → Tell the AI: python3 {pdir}/loop.py")
+            lines.append(f"    → python3 {pdir}/worker.py poll")
             lines.append("")
 
         lines.append("=" * 70)
@@ -198,11 +207,13 @@ class ChatSessionReasoner:
 
         request_file = pdir / "request.json"
         response_file = pdir / "response.txt"
-        signal = pdir / "WAITING"
+        ready_signal = pdir / "READY"
 
-        # Clean previous
+        # Clean previous response
         response_file.unlink(missing_ok=True)
+        (pdir / "response.tmp").unlink(missing_ok=True)
 
+        # Write request data
         request_data = {
             "system": system,
             "user": user,
@@ -211,11 +222,11 @@ class ChatSessionReasoner:
             "person_name": person.name,
         }
         request_file.write_text(json.dumps(request_data, indent=2), encoding="utf-8")
-        signal.write_text(
-            f"Request ready for {person.name} ({person.id}). "
-            "Read request.json, write your response to response.txt.",
-            encoding="utf-8",
-        )
+
+        # Atomically create READY signal (write tmp + rename)
+        tmp_ready = pdir / "READY.tmp"
+        tmp_ready.write_text("1", encoding="utf-8")
+        tmp_ready.rename(ready_signal)
 
         print(f"    ⏳ Waiting for response from {person.name} ({person.id})...")
         print(f"       Exchange dir: {pdir}")
@@ -227,12 +238,12 @@ class ChatSessionReasoner:
                 if text:
                     request_file.unlink(missing_ok=True)
                     response_file.unlink(missing_ok=True)
-                    signal.unlink(missing_ok=True)
+                    ready_signal.unlink(missing_ok=True)
                     return text
             time.sleep(_POLL_INTERVAL)
             elapsed += _POLL_INTERVAL
 
-        signal.unlink(missing_ok=True)
+        ready_signal.unlink(missing_ok=True)
         request_file.unlink(missing_ok=True)
         raise TimeoutError(
             f"No response from {person.name} ({person.id}) within {_TIMEOUT}s. "
@@ -277,136 +288,142 @@ class ChatSessionReasoner:
 
 ## How this works
 
-A script called `loop.py` in this directory handles everything:
-- It polls for requests from the orchestrator
-- It prints the prompt to stdout when a request arrives
-- It reads your response from stdin
-- It writes `response.txt` and loops
+Use `worker.py` in this directory (non-blocking, no stdin required):
 
-You just run `loop.py` and answer the prompts it gives you.
+1. `python3 worker.py poll` — check for work. If READY, prints the request and exits.
+2. You read the request, formulate your response.
+3. `python3 worker.py submit` — reads your response from stdin (heredoc), writes atomically.
+
+Example submit:
+```
+python3 worker.py submit << 'EOF'
+Your response here...
+EOF
+```
 """
 
-    def _build_loop_script(self, person: Person, pdir: Path, skill_registry: dict | None = None) -> str:
-        """Build a Python monitoring loop script for a person.
+    def _build_worker_script(self, person: Person, pdir: Path, skill_registry: dict | None = None) -> str:
+        """Build worker.py — non-blocking poll/submit commands for AI chat tabs.
 
-        The script prints the full identity/persona and rules on startup,
-        so the AI sees everything it needs just by running it.
+        No interactive stdin loops. AI runs discrete commands:
+          python3 worker.py poll    — claim & print request (or 'NO_WORK')
+          python3 worker.py submit  — read stdin, atomically write response.txt
         """
         persona_card = self._build_persona_card(person, skill_registry)
-        # Escape backslashes and triple-quotes for safe embedding
         escaped_persona = persona_card.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
 
         template = '''\
 #!/usr/bin/env python3
 """
-File-exchange loop for {name} ({pid}).
-Generated by the orchestrator. Run this script — it handles everything.
+Worker script for {name} ({pid}).
+Generated by the orchestrator. Non-blocking — run poll/submit as separate commands.
 """
 import json
+import os
 import sys
-import time
 from pathlib import Path
 
 EXCHANGE_DIR = Path(r"{exchange_dir}")
 PERSON_NAME = "{name}"
 PERSON_ID = "{pid}"
 PERSON_ROLE = "{role}"
-POLL_INTERVAL = 2  # seconds
 
 IDENTITY = """{persona}"""
 
-RULES = """
-RULES — read carefully:
-1. You ARE this person. Stay in character for every response.
-2. When a request arrives, this script prints the SYSTEM PROMPT and YOUR TASK.
-3. Read both carefully, then type your response.
-4. When finished, type a line containing ONLY: ===END===
-5. The script submits your response and waits for the next request.
-6. Type ONLY your response content — no meta-commentary like "Here is my answer".
-7. Do NOT stop the script unless told to.
-"""
 
-
-def wait_for_request():
-    """Poll until WAITING + request.json appear."""
-    waiting_file = EXCHANGE_DIR / "WAITING"
+def cmd_poll():
+    """Check for work. If READY exists, claim it, print request, exit."""
+    ready = EXCHANGE_DIR / "READY"
     request_file = EXCHANGE_DIR / "request.json"
-    while True:
-        if waiting_file.exists() and request_file.exists():
-            return json.loads(request_file.read_text(encoding="utf-8"))
-        time.sleep(POLL_INTERVAL)
 
+    if not ready.exists():
+        print("NO_WORK")
+        return
 
-def submit_response(text):
-    """Write response and signal completion."""
-    response_file = EXCHANGE_DIR / "response.txt"
-    response_file.write_text(text, encoding="utf-8")
+    # Claim the work by deleting READY
+    try:
+        ready.unlink()
+    except FileNotFoundError:
+        # Another process claimed it
+        print("NO_WORK")
+        return
 
+    if not request_file.exists():
+        print("ERROR: READY existed but no request.json found")
+        return
 
-def main():
+    data = json.loads(request_file.read_text(encoding="utf-8"))
+    system_prompt = data.get("system", "")
+    user_prompt = data.get("user", "")
+
     print("=" * 60)
-    print("  " + PERSON_NAME + " (" + PERSON_ROLE + ") — loop started")
-    print("  Exchange dir: " + str(EXCHANGE_DIR))
+    print("  WORK AVAILABLE — " + PERSON_NAME + " (" + PERSON_ROLE + ")")
     print("=" * 60)
     print()
+    print("-- SYSTEM PROMPT --")
+    print()
+    print(system_prompt)
+    print()
+    print("-- YOUR TASK --")
+    print()
+    print(user_prompt)
+    print()
+    print("=" * 60)
+    print()
+    print("Now run:  python3 " + str(EXCHANGE_DIR / "worker.py") + " submit << 'EOF'")
+    print("...your response...")
+    print("EOF")
+
+
+def cmd_submit():
+    """Read response from stdin, write atomically via tmp+rename."""
+    text = sys.stdin.read().strip()
+    if not text:
+        print("ERROR: empty response, nothing submitted.")
+        sys.exit(1)
+
+    tmp_file = EXCHANGE_DIR / "response.tmp"
+    final_file = EXCHANGE_DIR / "response.txt"
+
+    tmp_file.write_text(text, encoding="utf-8")
+    tmp_file.rename(final_file)
+
+    print("OK: response submitted (" + str(len(text)) + " chars)")
+
+
+def cmd_identity():
+    """Print this person's identity/persona card."""
     print(IDENTITY)
+
+
+def cmd_help():
+    print("Usage: python3 worker.py <command>")
     print()
-    print(RULES)
-    print()
-    print("Waiting for first request...")
-    print()
-
-    round_num = 0
-    while True:
-        request = wait_for_request()
-        round_num += 1
-
-        system = request.get("system", "")
-        user = request.get("user", "")
-
-        print("=" * 60)
-        print("  REQUEST #" + str(round_num))
-        print("=" * 60)
-        print()
-        print("-- SYSTEM PROMPT --")
-        print()
-        print(system)
-        print()
-        print("-- YOUR TASK --")
-        print()
-        print(user)
-        print()
-        print("=" * 60)
-        print("TYPE YOUR RESPONSE BELOW.")
-        print("When done, type a line containing ONLY: ===END===")
-        print("=" * 60)
-        print()
-
-        lines = []
-        try:
-            while True:
-                line = input()
-                if line.strip() == "===END===":
-                    break
-                lines.append(line)
-        except EOFError:
-            pass
-
-        response_text = "\\n".join(lines)
-        submit_response(response_text)
-
-        print()
-        print("  Response submitted (" + str(len(response_text)) + " chars)")
-        print("  Waiting for next request...")
-        print()
+    print("Commands:")
+    print("  poll     — Check for work. Prints request if available, or NO_WORK.")
+    print("  submit   — Read response from stdin, write atomically.")
+    print("  identity — Print persona card.")
+    print("  help     — Show this message.")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\\nLoop stopped.")
-        sys.exit(0)
+    if len(sys.argv) < 2:
+        cmd_help()
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    if cmd == "poll":
+        cmd_poll()
+    elif cmd == "submit":
+        cmd_submit()
+    elif cmd == "identity":
+        cmd_identity()
+    elif cmd == "help":
+        cmd_help()
+    else:
+        print("Unknown command: " + cmd)
+        cmd_help()
+        sys.exit(1)
 '''
         return template.format(
             name=person.name,

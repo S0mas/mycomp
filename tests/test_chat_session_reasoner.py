@@ -51,21 +51,23 @@ class TestPrepareAndInstructions:
         assert "Alice" in persona
         assert "senior architect" in persona
         assert "Use type hints" in persona
-        # loop.py should be generated
-        assert (pdir / "loop.py").exists()
-        loop = (pdir / "loop.py").read_text()
-        assert "EXCHANGE_DIR" in loop
-        assert str(pdir) in loop
-        assert "Alice" in loop  # persona embedded in script
+        # worker.py should be generated
+        assert (pdir / "worker.py").exists()
+        worker = (pdir / "worker.py").read_text()
+        assert "EXCHANGE_DIR" in worker
+        assert str(pdir) in worker
+        assert "Alice" in worker  # persona embedded in script
+        assert "cmd_poll" in worker
+        assert "cmd_submit" in worker
 
     def test_prepare_all(self, exchange_dir, person_alice, person_bob):
         r = ChatSessionReasoner(exchange_root=exchange_dir)
         r.prepare_all([person_alice, person_bob])
 
         assert (exchange_dir / "alice" / "persona.md").exists()
-        assert (exchange_dir / "alice" / "loop.py").exists()
+        assert (exchange_dir / "alice" / "worker.py").exists()
         assert (exchange_dir / "bob" / "persona.md").exists()
-        assert (exchange_dir / "bob" / "loop.py").exists()
+        assert (exchange_dir / "bob" / "worker.py").exists()
 
     def test_print_instructions_contains_tab_info(self, exchange_dir, person_alice, person_bob, capsys):
         r = ChatSessionReasoner(exchange_root=exchange_dir)
@@ -75,7 +77,7 @@ class TestPrepareAndInstructions:
         assert "2 separate AI chat tab(s)" in text
         assert "Tab 1: Alice" in text
         assert "Tab 2: Bob" in text
-        assert "loop.py" in text
+        assert "worker.py" in text
 
     def test_print_instructions_empty_when_no_persons(self, exchange_dir):
         r = ChatSessionReasoner(exchange_root=exchange_dir)
@@ -85,7 +87,7 @@ class TestPrepareAndInstructions:
         """prepare_person should NOT delete exchange files — think() manages those."""
         pdir = exchange_dir / "alice"
         pdir.mkdir(parents=True)
-        (pdir / "WAITING").write_text("stale")
+        (pdir / "READY").write_text("1")
         (pdir / "request.json").write_text("{}")
         (pdir / "response.txt").write_text("old")
 
@@ -93,7 +95,7 @@ class TestPrepareAndInstructions:
         r.prepare_person(person_alice)
 
         # Files are preserved (think() cleans them, not prepare)
-        assert (pdir / "WAITING").exists()
+        assert (pdir / "READY").exists()
         assert (pdir / "request.json").exists()
         assert (pdir / "response.txt").exists()
 
@@ -124,7 +126,7 @@ class TestThink:
         # Files should be cleaned up
         assert not (pdir / "request.json").exists()
         assert not (pdir / "response.txt").exists()
-        assert not (pdir / "WAITING").exists()
+        assert not (pdir / "READY").exists()
 
     def test_think_writes_correct_request(self, exchange_dir, person_alice):
         r = ChatSessionReasoner(exchange_root=exchange_dir)
