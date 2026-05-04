@@ -1,12 +1,19 @@
 """
-LLM backend abstraction.
+LLM backend and Reasoner abstractions.
 
-Defines the protocol that any LLM provider must implement,
-plus a registry for selecting backends by name.
+LLMBackend — transport layer: send prompt, get text back.
+Reasoner   — agent layer: given a Person and Messages, produce a response.
+
+These are separate concerns:
+  - LLMBackend knows nothing about persons or messages
+  - Reasoner knows nothing about APIs or HTTP
 """
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .models import Message, Person
 
 
 @runtime_checkable
@@ -15,6 +22,32 @@ class LLMBackend(Protocol):
 
     def call(self, system: str, user: str, max_tokens: int, model: str) -> str:
         """Send a single system+user message pair and return the response text."""
+        ...
+
+
+@runtime_checkable
+class Reasoner(Protocol):
+    """Turns a Person + messages into a response. The 'brain' behind a Person."""
+
+    def think(
+        self,
+        person: Person,
+        messages: list[Message],
+        skill_registry: dict | None = None,
+        session_rules_text: str = "",
+        max_tokens: int = 4096,
+    ) -> str:
+        """
+        Given who the person is and what messages they've received,
+        produce a response.
+
+        Args:
+            person: The Person doing the thinking
+            messages: Messages this person has received/sent in this session
+            skill_registry: {skill_id: Skill} for prompt composition
+            session_rules_text: Human-readable session rules (person is aware of these)
+            max_tokens: Response budget
+        """
         ...
 
 

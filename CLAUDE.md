@@ -59,15 +59,17 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 aicompany/          core package
   config.py         paths + env vars + backend selection
   models.py         dataclasses (Skill, Person, Team, Task, ProjectPlan, CompanyState, RequirementsEvaluation) + build_prompt()
-  llm_backend.py    LLMBackend protocol + backend registry (provider-agnostic)
-  backends/         provider implementations (anthropic, add your own)
+  llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain)
+  reasoner.py       LLMReasoner — wraps LLMBackend + build_prompt + message→prompt conversion
+  backends/         provider implementations (anthropic, openai, fake, chat_session)
+  communication.py  Session management, message routing, communication patterns (lead_delegates, pair_review)
   registry.py       all YAML file I/O (skills, persons, teams, plans, outputs)
-  llm.py            all LLM calls via backend abstraction (CTO / HR / evaluation / multi-person team execution)
-  orchestrator.py   execution loop + topological sort + prompt composition
+  llm.py            stateless LLM calls via backend (CTO / HR / evaluation — NOT team execution)
+  orchestrator.py   execution loop + topological sort + session-based team coordination
   oversight.py      human checkpoint (Approve/Reject/Modify)
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands (with interactive evaluation gate)
-tests/              pytest suite — 137 tests, all mocked
+tests/              pytest suite — 159 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen

@@ -1,10 +1,15 @@
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional
+import uuid
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _msg_id() -> str:
+    return uuid.uuid4().hex[:12]
 
 
 @dataclass
@@ -67,6 +72,7 @@ class Team:
     skills: list        # union of member skills — used for task assignment matching
     members: list       # list of Person IDs
     lead_id: str        # Person ID of the team lead
+    communication: dict = field(default_factory=dict)  # SessionRules config
     created_at: str = field(default_factory=_now)
 
     @classmethod
@@ -77,6 +83,7 @@ class Team:
             skills=d.get("skills", []),
             members=d.get("members", []),
             lead_id=d.get("lead_id", ""),
+            communication=d.get("communication", {}),
             created_at=d.get("created_at", _now()),
         )
 
@@ -260,3 +267,163 @@ class RequirementsEvaluation:
     @property
     def has_risks(self) -> bool:
         return len(self.risks) > 0
+
+
+# ── Communication ──────────────────────────────────────────────────────────────
+
+@dataclass
+class Message:
+    """A single communication between persons, or from the system."""
+    sender: str             # person_id or "system"
+    recipient: str          # person_id, "team", or "orchestrator"
+    kind: str               # "brief", "task", "result", "review", "question", "answer", "system"
+    content: str
+    context: dict = field(default_factory=dict)   # metadata: task_id, reason, etc.
+    id: str = field(default_factory=_msg_id)
+    timestamp: str = field(default_factory=_now)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Message":
+        return cls(
+            sender=d["sender"],
+            recipient=d["recipient"],
+            kind=d.get("kind", "task"),
+            content=d.get("content", ""),
+            context=d.get("context", {}),
+            id=d.get("id", _msg_id()),
+            timestamp=d.get("timestamp", _now()),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def system(cls, recipient: str, content: str, **ctx) -> "Message":
+        """Create a system message (e.g. rule violation feedback)."""
+        return cls(sender="system", recipient=recipient, kind="system",
+                   content=content, context=ctx)
+
+
+@dataclass
+class SessionRules:
+    """Communication rules for a session — Persons are made aware of these."""
+    pattern: str = "lead_delegates"     # communication pattern name
+    max_rounds: int = 3                 # max back-and-forth exchanges
+    allow_direct: bool = True           # can members message each other?
+    channels: list = field(default_factory=list)  # allowed direct pairs: [["a","b"], ...]
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SessionRules":
+        return cls(
+            pattern=d.get("pattern", "lead_delegates"),
+            max_rounds=d.get("max_rounds", 3),
+            allow_direct=d.get("allow_direct", True),
+            channels=d.get("channels", []),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def describe(self, participant_id: str, all_participants: list[str]) -> str:
+        """Produce a human-readable summary of rules for a participant."""
+        others = [p for p in all_participants if p != participant_id]
+        lines = [
+            f"Communication rules for this session:",
+            f"- Pattern: {self.pattern}",
+            f"- Max rounds: {self.max_rounds}",
+            f"- Other participants: {', '.join(others)}",
+        ]
+        if self.allow_direct:
+            if self.channels:
+                my_peers = [
+                    b if a == participant_id else a
+                    for a, b in self.channels
+                    if participant_id in (a, b)
+                ]
+                if my_peers:
+                    lines.append(f"- You may message directly: {', '.join(my_peers)}")
+                else:
+                    lines.append("- You may not send direct messages to others")
+            else:
+                lines.append("- You may message any participant directly")
+        else:
+            lines.append("- Direct messages are not allowed — communicate through the lead")
+        return "\n".join(lines)
+
+
+@dataclass
+class Session:
+    """Runtime container for a multi-person conversation on a task."""
+    id: str
+    task_id: str
+    participants: list[str]          # person_ids
+    rules: SessionRules = field(default_factory=SessionRules)
+    messages: list[Message] = field(default_factory=list)
+    round: int = 0
+    status: str = "active"           # "active" | "complete" | "terminated"
+
+    def can_send(self, sender: str, recipient: str) -> tuple[bool, str]:
+        """Check if a message is allowed. Returns (allowed, reason)."""
+        if self.status != "active":
+            return False, f"Session is {self.status}"
+
+        if self.round >= self.rules.max_rounds:
+            return False, f"Max rounds ({self.rules.max_rounds}) reached"
+
+        if sender not in self.participants and sender != "system":
+            return False, f"{sender} is not a participant in this session"
+
+        if recipient not in self.participants and recipient not in ("team", "orchestrator", "system"):
+            return False, f"{recipient} is not a participant in this session"
+
+        if not self.rules.allow_direct and sender != "system":
+            # Only lead or system can broadcast — others must go through lead
+            # (enforced by pattern, not here — this is the general channel check)
+            pass
+
+        if self.rules.channels and sender != "system":
+            pair_allowed = (
+                [sender, recipient] in self.rules.channels or
+                [recipient, sender] in self.rules.channels
+            )
+            # Lead can always talk to anyone
+            lead_involved = False  # caller should check this if needed
+            if not pair_allowed and self.rules.allow_direct:
+                return False, f"No direct channel between {sender} and {recipient}"
+
+        return True, ""
+
+    def add_message(self, msg: Message) -> Message | None:
+        """
+        Try to add a message to the session.
+        Returns None if allowed, or a system feedback Message if blocked.
+        """
+        allowed, reason = self.can_send(msg.sender, msg.recipient)
+        if not allowed:
+            self.messages.append(msg)  # log the attempt
+            feedback = Message.system(
+                msg.sender,
+                f"Message to {msg.recipient} was not delivered: {reason}. "
+                f"Please include your final output now.",
+                reason=reason, blocked_message_id=msg.id,
+            )
+            self.messages.append(feedback)
+            return feedback
+
+        self.messages.append(msg)
+        return None
+
+    def advance_round(self) -> None:
+        """Increment the round counter."""
+        self.round += 1
+
+    def complete(self) -> None:
+        self.status = "complete"
+
+    def is_complete(self) -> bool:
+        return self.status != "active" or self.round >= self.rules.max_rounds
+
+    def messages_for(self, person_id: str) -> list[Message]:
+        """Get all messages a person has received (including system)."""
+        return [m for m in self.messages
+                if m.recipient in (person_id, "team") or m.sender == person_id]

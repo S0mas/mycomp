@@ -1,8 +1,10 @@
 from collections import deque
 from datetime import datetime, timezone
 
-from . import llm, oversight, registry
-from .models import ProjectPlan, Task, build_prompt
+from . import oversight, registry
+from .communication import create_session, run_pattern
+from .models import ProjectPlan, SessionRules, Task, build_prompt
+from .reasoner import LLMReasoner
 
 
 class OrchestratorError(Exception):
@@ -133,34 +135,26 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
 
         try:
             team, lead, members, skill_registry = registry.load_team_with_members(task.assigned_team)
+
+            # Build session from team communication config
+            rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
+            session = create_session(task.id, [p.id for p in members], rules)
+
             context = _build_project_context(plan, completed_ids)
+            reasoner = LLMReasoner()
 
-            # Step 1: lead produces a work brief for the team
-            member_dicts = [{"id": p.id, "name": p.name, "role": p.role} for p in members]
-            lead_prompt = build_prompt(lead, skill_registry)
-            print(f"    → {lead.name} (lead) writing brief...")
-            brief = llm.team_brief(lead_prompt, task.title,
-                                   task.description, context, member_dicts)
-
-            # Step 2: each non-lead member executes their part
-            contributions = []
-            for person in members:
-                if person.id == lead.id:
-                    continue
-                person_prompt = build_prompt(person, skill_registry)
-                print(f"    → {person.name} ({person.role}) executing...")
-                output = llm.person_execute(person_prompt, person.name,
-                                            brief, task.title)
-                contributions.append({"name": person.name, "output": output})
-
-            # Step 3: lead synthesizes into the final deliverable
-            if contributions:
-                print(f"    → {lead.name} (lead) synthesizing...")
-                output = llm.team_synthesize(lead_prompt, task.title,
-                                             contributions)
-            else:
-                # Single-person team: lead is sole contributor, brief IS the output
-                output = brief
+            output = run_pattern(
+                pattern_name=rules.pattern,
+                session=session,
+                lead=lead,
+                members=members,
+                task_title=task.title,
+                task_description=task.description,
+                project_context=context,
+                reasoner=reasoner,
+                skill_registry=skill_registry,
+                on_status=lambda msg: print(f"    → {msg}"),
+            )
 
         except Exception as exc:
             task.status = "failed"
