@@ -16,7 +16,7 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 - `AICOMPANY_MODEL` — optional, defaults to `claude-sonnet-4-6`
 - `ANTHROPIC_API_KEY` — required when using the `anthropic` backend
 - `AICOMPANY_MCP_SERVERS` — optional, JSON array of MCP server objects for the Anthropic backend (default: `[]`, MCP disabled)
-  - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/sse","name":"mycomp"}]`
+  - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]`
   - Start the MCP server: `./scripts/start_mcp.sh` (starts server + cloudflare tunnel, prints public URL)
 
 ---

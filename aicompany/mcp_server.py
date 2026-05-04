@@ -8,7 +8,7 @@ Run via:
 
 For remote access (Anthropic API requires public URL):
     ./cloudflared tunnel --url http://localhost:8000
-Then set: AICOMPANY_MCP_SERVERS='[{"type":"url","url":"https://<tunnel>.trycloudflare.com/sse","name":"mycomp"}]'
+Then set: AICOMPANY_MCP_SERVERS='[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]'
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from aicompany import config
 
@@ -29,7 +30,13 @@ for _i, _arg in enumerate(sys.argv):
         _port = int(sys.argv[_i + 1])
 
 _sse_mode = "--sse" in sys.argv
-mcp = FastMCP("mycomp", host="127.0.0.1", port=_port) if _sse_mode else FastMCP("mycomp")
+mcp = FastMCP(
+    "mycomp",
+    host="127.0.0.1",
+    port=_port,
+    # Disable DNS rebinding protection so cloudflare tunnel host headers pass through
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+) if _sse_mode else FastMCP("mycomp")
 
 
 def _safe_path(path: str) -> Path:
@@ -108,5 +115,7 @@ def get_project_status() -> str:
 
 
 if __name__ == "__main__":
-    transport = "sse" if _sse_mode else "stdio"
+    # streamable-http uses a single POST /mcp endpoint — compatible with Anthropic's MCP connector.
+    # sse uses GET /sse + POST /messages (older split-endpoint protocol).
+    transport = "streamable-http" if _sse_mode else "stdio"
     mcp.run(transport=transport)

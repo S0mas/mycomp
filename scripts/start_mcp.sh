@@ -5,7 +5,7 @@
 #   ./scripts/start_mcp.sh [--port 8000]
 #
 # After startup, copy the tunnel URL from the output and set:
-#   AICOMPANY_MCP_SERVERS='[{"type":"url","url":"https://<tunnel>.trycloudflare.com/sse","name":"mycomp"}]'
+#   AICOMPANY_MCP_SERVERS='[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]'
 # or add it to .claude/settings.local.json under "env".
 
 set -euo pipefail
