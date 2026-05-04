@@ -268,6 +268,33 @@ def cmd_new_project(requirements_file: str):
 
     _print_evaluation(evaluation)
 
+    # ── Hard block on critical gaps ───────────────────────────────────────────
+    blockers = []
+    if evaluation.overall_score < config.MIN_SCORE_TO_PROCEED:
+        blockers.append(
+            f"Overall score {evaluation.overall_score:.1f} is below minimum "
+            f"{config.MIN_SCORE_TO_PROCEED}."
+        )
+    for label, score in [("Clarity", evaluation.clarity),
+                         ("Completeness", evaluation.completeness),
+                         ("Feasibility", evaluation.feasibility)]:
+        if score < config.MIN_DIMENSION_SCORE:
+            blockers.append(
+                f"{label} score {score}/5 is below minimum "
+                f"{config.MIN_DIMENSION_SCORE}."
+            )
+    if evaluation.verdict == "reject":
+        blockers.append("Evaluation verdict is REJECT.")
+
+    if blockers:
+        click.echo()
+        _print_err("Cannot proceed — critical gaps in requirements:")
+        for b in blockers:
+            _print_err(f"  • {b}")
+        click.echo()
+        _print_info(f"Fix the requirements and re-run:  python main.py new-project {requirements_file}")
+        raise SystemExit(1)
+
     while True:
         choice = click.prompt(
             click.style("\n[P]roceed / [E]dit requirements / [C]ancel", fg="cyan"),

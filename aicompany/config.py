@@ -17,6 +17,8 @@ MAX_TOKENS_TEAM = 8096
 MAX_TOKENS_EVAL = 2048
 
 MIN_REQUIREMENTS_LENGTH = 20  # characters — below this, reject as too vague
+MIN_SCORE_TO_PROCEED = 2.5    # overall score below this → hard block, cannot proceed
+MIN_DIMENSION_SCORE = 2       # any single dimension (clarity/completeness/feasibility) below this → hard block
 
 
 def require_api_key() -> str:
