@@ -1,0 +1,9 @@
+# System-level dependencies (apt packages)
+# Install with: sudo apt-get install -y $(grep -v '^#' system-deps.txt | tr '\n' ' ')
+#
+# Used by: Python venv creation (python3 -m venv .venv)
+# Docker layer: base OS image setup
+
+python3.10
+python3.10-venv
+python3-pip
