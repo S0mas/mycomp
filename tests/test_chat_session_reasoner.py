@@ -51,13 +51,20 @@ class TestPrepareAndInstructions:
         assert "Alice" in persona
         assert "senior architect" in persona
         assert "Use type hints" in persona
+        # loop.py should be generated
+        assert (pdir / "loop.py").exists()
+        loop = (pdir / "loop.py").read_text()
+        assert "EXCHANGE_DIR" in loop
+        assert str(pdir) in loop
 
     def test_prepare_all(self, exchange_dir, person_alice, person_bob):
         r = ChatSessionReasoner(exchange_root=exchange_dir)
         r.prepare_all([person_alice, person_bob])
 
         assert (exchange_dir / "alice" / "persona.md").exists()
+        assert (exchange_dir / "alice" / "loop.py").exists()
         assert (exchange_dir / "bob" / "persona.md").exists()
+        assert (exchange_dir / "bob" / "loop.py").exists()
 
     def test_print_instructions_contains_tab_info(self, exchange_dir, person_alice, person_bob, capsys):
         r = ChatSessionReasoner(exchange_root=exchange_dir)
@@ -67,9 +74,7 @@ class TestPrepareAndInstructions:
         assert "2 separate AI chat tab(s)" in text
         assert "Tab 1: Alice" in text
         assert "Tab 2: Bob" in text
-        assert "WAITING" in text
-        assert "response.txt" in text
-        assert "request.json" in text
+        assert "loop.py" in text
 
     def test_print_instructions_empty_when_no_persons(self, exchange_dir):
         r = ChatSessionReasoner(exchange_root=exchange_dir)

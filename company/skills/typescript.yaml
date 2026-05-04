@@ -1,0 +1,8 @@
+category: language
+created_at: '2026-05-04T20:10:55.519946+00:00'
+id: typescript
+knowledge:
+- Always define explicit types for function parameters and return values
+- Use interfaces for object shapes and type aliases for unions
+- Avoid 'any' — use 'unknown' and narrow with type guards
+name: TypeScript

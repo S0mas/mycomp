@@ -1,0 +1,7 @@
+category: language
+created_at: '2026-05-04T20:10:55.519953+00:00'
+id: css
+knowledge:
+- Use flexbox and grid for layout, not floats
+- Use CSS custom properties (variables) for theming
+name: CSS

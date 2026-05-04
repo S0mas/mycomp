@@ -269,3 +269,9 @@ Then reference it from any person's `skills` list.
 | Prompt patches (append strings) | Grows chaotically. Can't remove or categorize. |
 | Database storage | Not inspectable. Can't version-control. Not editable by humans. |
 | **Structured YAML layers** | **Right level. Shareable. Inspectable. Editable. Versionable.** |
+
+---
+
+## Future Improvements (TODO)
+
+- **ChatSessionReasoner: once-per-project setup** — Currently `setup()` runs per-task, so if the same team handles 3 tasks it recreates dirs, persona cards, and `loop.py` three times. Should either make it idempotent (skip if already prepared) or move setup to once-per-project scope. The loop scripts and persona cards are task-independent, so re-creating them is pure waste.

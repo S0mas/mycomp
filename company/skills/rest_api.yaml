@@ -1,0 +1,9 @@
+category: practice
+created_at: '2026-05-04T20:10:55.519950+00:00'
+id: rest_api
+knowledge:
+- 'Use proper HTTP methods: GET for reads, POST for creates, PUT/PATCH for updates'
+- 'Return appropriate status codes: 201 for created, 404 for not found, 422 for validation
+  errors'
+- 'Version APIs in the URL path: /api/v1/'
+name: REST API Design
