@@ -8,13 +8,36 @@ def _now() -> str:
 
 
 @dataclass
+class Person:
+    id: str
+    name: str
+    role: str        # "lead" | "coder" | "reviewer" | "architect" | "specialist"
+    system_prompt: str
+    tools: list = field(default_factory=list)
+    created_at: str = field(default_factory=_now)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Person":
+        return cls(
+            id=d["id"],
+            name=d["name"],
+            role=d.get("role", "specialist"),
+            system_prompt=d.get("system_prompt", ""),
+            tools=d.get("tools", []),
+            created_at=d.get("created_at", _now()),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class Team:
     id: str
     name: str
-    skills: list
-    system_prompt: str
-    tools: list = field(default_factory=list)
-    context_notes: str = ""
+    skills: list        # union of member skills — used for task assignment matching
+    members: list       # list of Person IDs
+    lead_id: str        # Person ID of the team lead
     created_at: str = field(default_factory=_now)
 
     @classmethod
@@ -23,9 +46,8 @@ class Team:
             id=d["id"],
             name=d["name"],
             skills=d.get("skills", []),
-            system_prompt=d.get("system_prompt", ""),
-            tools=d.get("tools", []),
-            context_notes=d.get("context_notes", ""),
+            members=d.get("members", []),
+            lead_id=d.get("lead_id", ""),
             created_at=d.get("created_at", _now()),
         )
 
@@ -42,6 +64,7 @@ class CompanyState:
     version: str = "1"
     created_at: str = field(default_factory=_now)
     teams: list = field(default_factory=list)
+    persons: list = field(default_factory=list)
     technologies_seen: list = field(default_factory=list)
 
     @classmethod
@@ -50,6 +73,7 @@ class CompanyState:
             version=d.get("version", "1"),
             created_at=d.get("created_at", _now()),
             teams=d.get("teams", []),
+            persons=d.get("persons", []),
             technologies_seen=d.get("technologies_seen", []),
         )
 
@@ -58,6 +82,9 @@ class CompanyState:
 
     def team_ids(self) -> list:
         return [t["id"] for t in self.teams]
+
+    def person_ids(self) -> list:
+        return [p["id"] for p in self.persons]
 
     def all_skills(self) -> set:
         skills = set()

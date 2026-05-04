@@ -17,22 +17,20 @@ class TestTeam:
         assert restored.id == sample_team.id
         assert restored.name == sample_team.name
         assert restored.skills == sample_team.skills
-        assert restored.system_prompt == sample_team.system_prompt
+        assert restored.members == sample_team.members
+        assert restored.lead_id == sample_team.lead_id
 
     def test_defaults(self):
-        t = Team(id="x", name="X", skills=[], system_prompt="p")
-        assert t.tools == []
-        assert t.context_notes == ""
+        t = Team(id="x", name="X", skills=[], members=["p1"], lead_id="p1")
         assert t.created_at  # non-empty ISO timestamp
 
     def test_skill_set_is_lowercase(self):
-        t = Team(id="x", name="X", skills=["Python", "FastAPI"], system_prompt="p")
+        t = Team(id="x", name="X", skills=["Python", "FastAPI"], members=["p1"], lead_id="p1")
         assert t.skill_set == {"python", "fastapi"}
 
     def test_from_dict_tolerates_missing_optional_fields(self):
-        t = Team.from_dict({"id": "y", "name": "Y", "skills": ["go"], "system_prompt": "s"})
-        assert t.tools == []
-        assert t.context_notes == ""
+        t = Team.from_dict({"id": "y", "name": "Y", "skills": ["go"], "members": ["p1"], "lead_id": "p1"})
+        assert t.created_at  # should have a default
 
 
 class TestCompanyState:

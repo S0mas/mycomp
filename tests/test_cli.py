@@ -24,19 +24,19 @@ import aicompany.config as config
 from aicompany.cli import cli
 from aicompany import registry
 from aicompany.models import CompanyState, Team
-from tests.conftest import write_state, write_team, write_plan
+from tests.conftest import write_state, write_team, write_plan, write_persons
 
 
 MOCK_PLAN_RESPONSE = {
     "title": "Simple REST API",
     "tech_stack": ["python", "fastapi"],
-    "teams_required": ["backend_engineer"],
+    "teams_required": ["backend_team"],
     "tasks": [
         {
             "id": "task_001",
             "title": "Design schema",
             "description": "Create DB schema",
-            "assigned_team": "backend_engineer",
+            "assigned_team": "backend_team",
             "depends_on": [],
             "is_checkpoint": False,
         }
@@ -44,12 +44,29 @@ MOCK_PLAN_RESPONSE = {
 }
 
 MOCK_TEAM_RESPONSE = {
-    "id": "devops_engineer",
-    "name": "DevOps Engineer",
-    "skills": ["docker", "kubernetes", "terraform"],
-    "system_prompt": "You are a senior DevOps engineer.",
-    "tools": [],
-    "context_notes": "",
+    "team": {
+        "id": "devops_team",
+        "name": "DevOps Team",
+        "skills": ["docker", "kubernetes", "terraform"],
+        "members": ["devops_lead", "devops_coder"],
+        "lead_id": "devops_lead",
+    },
+    "persons": [
+        {
+            "id": "devops_lead",
+            "name": "DevOps Lead",
+            "role": "lead",
+            "system_prompt": "You are a DevOps lead.",
+            "tools": [],
+        },
+        {
+            "id": "devops_coder",
+            "name": "DevOps Engineer",
+            "role": "coder",
+            "system_prompt": "You are a DevOps engineer.",
+            "tools": [],
+        },
+    ],
 }
 
 
@@ -76,13 +93,13 @@ class TestInit:
     def test_seeds_two_teams(self, runner):
         runner.invoke(cli, ["init"])
         state = registry.load_state()
-        assert "backend_engineer" in state.team_ids()
-        assert "frontend_engineer" in state.team_ids()
+        assert "backend_team" in state.team_ids()
+        assert "frontend_team" in state.team_ids()
 
     def test_team_yaml_files_created(self, runner):
         runner.invoke(cli, ["init"])
-        assert (config.TEAMS_DIR / "backend_engineer.yaml").exists()
-        assert (config.TEAMS_DIR / "frontend_engineer.yaml").exists()
+        assert (config.TEAMS_DIR / "backend_team.yaml").exists()
+        assert (config.TEAMS_DIR / "frontend_team.yaml").exists()
 
     def test_idempotent_second_run_warns(self, runner):
         runner.invoke(cli, ["init"])
@@ -126,19 +143,19 @@ class TestNewProject:
         assert plan.tasks[0].id == "task_001"
 
     def test_no_hr_call_when_team_exists(self, runner, requirements_file):
-        """backend_engineer is seeded by init — HR should not be called."""
+        """backend_team is seeded by init — HR should not be called."""
         _, mock_llm = self._run_new_project(runner, requirements_file)
         mock_llm.hr_create_team.assert_not_called()
 
     def test_hr_called_for_missing_team(self, runner, requirements_file):
         plan_needing_devops = {
             **MOCK_PLAN_RESPONSE,
-            "teams_required": ["backend_engineer", "devops_engineer"],
+            "teams_required": ["backend_team", "devops_team"],
             "tasks": MOCK_PLAN_RESPONSE["tasks"] + [{
                 "id": "task_002",
                 "title": "Deploy",
                 "description": "Deploy to prod",
-                "assigned_team": "devops_engineer",
+                "assigned_team": "devops_team",
                 "depends_on": ["task_001"],
                 "is_checkpoint": True,
             }],
@@ -146,7 +163,7 @@ class TestNewProject:
         _, mock_llm = self._run_new_project(runner, requirements_file, cto_response=plan_needing_devops)
         mock_llm.hr_create_team.assert_called_once()
         call_args = mock_llm.hr_create_team.call_args[0]
-        assert call_args[0] == "devops_engineer"
+        assert call_args[0] == "devops_team"
 
     def test_requirements_md_copied_into_project(self, runner, requirements_file):
         self._run_new_project(runner, requirements_file)
@@ -163,28 +180,31 @@ class TestNewProject:
 # ── run ────────────────────────────────────────────────────────────────────────
 
 class TestRun:
-    def test_delegates_to_orchestrator(self, runner, sample_state, sample_team, sample_plan):
+    def test_delegates_to_orchestrator(self, runner, sample_state, sample_team, sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
+        write_persons(sample_persons)
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
             result = runner.invoke(cli, ["run", sample_plan.project_id])
             mock_orch.run_project.assert_called_once_with(sample_plan.project_id, dry_run=False)
 
-    def test_dry_run_flag(self, runner, sample_state, sample_team, sample_plan):
+    def test_dry_run_flag(self, runner, sample_state, sample_team, sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
+        write_persons(sample_persons)
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
             runner.invoke(cli, ["run", "--dry-run", sample_plan.project_id])
             mock_orch.run_project.assert_called_once_with(sample_plan.project_id, dry_run=True)
 
-    def test_orchestrator_error_exits_nonzero(self, runner, sample_state, sample_team, sample_plan):
+    def test_orchestrator_error_exits_nonzero(self, runner, sample_state, sample_team, sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
+        write_persons(sample_persons)
 
         from aicompany.orchestrator import OrchestratorError
         with patch("aicompany.cli.orchestrator") as mock_orch:

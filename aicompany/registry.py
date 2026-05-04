@@ -1,10 +1,9 @@
-import shutil
 from pathlib import Path
 
 import yaml
 
 from . import config
-from .models import CompanyState, ProjectPlan, Task, Team
+from .models import CompanyState, Person, ProjectPlan, Task, Team
 
 
 # ── Company state ──────────────────────────────────────────────────────────────
@@ -24,6 +23,34 @@ def save_state(state: CompanyState) -> None:
         yaml.dump(state.to_dict(), f, default_flow_style=False, allow_unicode=True)
 
 
+# ── Persons ────────────────────────────────────────────────────────────────────
+
+def _persons_dir() -> Path:
+    return config.COMPANY_DIR / "persons"
+
+
+def load_person(person_id: str) -> Person:
+    path = _persons_dir() / f"{person_id}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Person file not found: {path}")
+    with path.open() as f:
+        return Person.from_dict(yaml.safe_load(f))
+
+
+def save_person(person: Person) -> None:
+    _persons_dir().mkdir(parents=True, exist_ok=True)
+    path = _persons_dir() / f"{person.id}.yaml"
+    with path.open("w") as f:
+        yaml.dump(person.to_dict(), f, default_flow_style=False, allow_unicode=True)
+
+    # Keep state.yaml in sync
+    state = load_state()
+    person_entry = {"id": person.id, "name": person.name, "role": person.role}
+    if person.id not in state.person_ids():
+        state.persons.append(person_entry)
+        save_state(state)
+
+
 # ── Teams ──────────────────────────────────────────────────────────────────────
 
 def load_team(team_id: str) -> Team:
@@ -32,6 +59,14 @@ def load_team(team_id: str) -> Team:
         raise FileNotFoundError(f"Team file not found: {path}")
     with path.open() as f:
         return Team.from_dict(yaml.safe_load(f))
+
+
+def load_team_with_members(team_id: str) -> tuple[Team, Person, list[Person]]:
+    """Return (team, lead_person, [all_member_persons])."""
+    team = load_team(team_id)
+    members = [load_person(pid) for pid in team.members]
+    lead = next((p for p in members if p.id == team.lead_id), members[0])
+    return team, lead, members
 
 
 def save_team(team: Team) -> None:
@@ -43,8 +78,7 @@ def save_team(team: Team) -> None:
     # Keep state.yaml in sync
     state = load_state()
     team_entry = {"id": team.id, "name": team.name, "skills": team.skills}
-    existing_ids = [t["id"] for t in state.teams]
-    if team.id not in existing_ids:
+    if team.id not in state.team_ids():
         state.teams.append(team_entry)
         save_state(state)
 

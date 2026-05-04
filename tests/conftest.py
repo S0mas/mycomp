@@ -9,7 +9,7 @@ import yaml
 from pathlib import Path
 
 import aicompany.config as config
-from aicompany.models import CompanyState, ProjectPlan, Task, Team
+from aicompany.models import CompanyState, Person, ProjectPlan, Task, Team
 
 
 # ── Filesystem isolation ───────────────────────────────────────────────────────
@@ -40,14 +40,23 @@ def isolated_fs(tmp_path, monkeypatch):
 # ── Reusable model factories ───────────────────────────────────────────────────
 
 @pytest.fixture
+def sample_persons() -> list:
+    return [
+        Person(id="be_lead", name="Backend Lead", role="lead",
+               system_prompt="You are a backend lead."),
+        Person(id="be_coder", name="Backend Coder", role="coder",
+               system_prompt="You are a backend coder."),
+    ]
+
+
+@pytest.fixture
 def sample_team() -> Team:
     return Team(
         id="backend_engineer",
         name="Backend Engineer",
         skills=["python", "fastapi", "postgresql"],
-        system_prompt="You are a senior backend engineer.",
-        tools=[],
-        context_notes="",
+        members=["be_lead", "be_coder"],
+        lead_id="be_lead",
     )
 
 
@@ -114,6 +123,16 @@ def write_team(team: Team) -> None:
     path = config.TEAMS_DIR / f"{team.id}.yaml"
     with path.open("w") as f:
         yaml.dump(team.to_dict(), f, default_flow_style=False)
+
+
+def write_persons(persons: list) -> None:
+    """Write Person objects to the (patched) company/persons/ dir."""
+    persons_dir = config.COMPANY_DIR / "persons"
+    persons_dir.mkdir(parents=True, exist_ok=True)
+    for p in persons:
+        path = persons_dir / f"{p.id}.yaml"
+        with path.open("w") as f:
+            yaml.dump(p.to_dict(), f, default_flow_style=False)
 
 
 def write_plan(plan: ProjectPlan) -> None:

@@ -71,7 +71,7 @@ or after:
 ```
 
 Rules:
-- team IDs must be snake_case (e.g., backend_engineer, devops_engineer)
+- team IDs must be snake_case (e.g., backend_team, frontend_team)
 - Reuse existing team IDs from the registry when their skills match the task
 - Mark `is_checkpoint: true` for tasks involving: external services, deployment,
   payment/billing systems, security configuration, or any irreversible production action
@@ -101,47 +101,72 @@ def cto_analyze(requirements_text: str, company_state_yaml: str) -> dict:
 # ── HR ─────────────────────────────────────────────────────────────────────────
 
 _HR_SYSTEM = """\
-You are the Head of HR at an AI-driven software company. Your job is to create a team
-configuration for a new specialist agent.
+You are the Head of HR at an AI-driven software company. A "team" is a group of
+specialist AI agents (persons) who collaborate on tasks. Each person has a specific
+role: lead, coder, reviewer, architect, or specialist.
+
+When asked to create a team for a skill, design 2-4 persons that together cover the
+work. One person must have role "lead" — they coordinate the others.
 
 Output ONLY a JSON block (```json ... ```) with EXACTLY this schema — no prose:
 
 ```json
 {
-  "id": "snake_case_team_id",
-  "name": "Human Readable Team Name",
-  "skills": ["skill1", "skill2", "skill3"],
-  "system_prompt": "Full system prompt for this specialist AI agent",
-  "tools": [],
-  "context_notes": ""
+  "team": {
+    "id": "snake_case_team_id",
+    "name": "Human Readable Team Name",
+    "skills": ["skill1", "skill2", "skill3"],
+    "members": ["person_id_1", "person_id_2"],
+    "lead_id": "person_id_1"
+  },
+  "persons": [
+    {
+      "id": "person_id_1",
+      "name": "Full Name / Title",
+      "role": "lead",
+      "system_prompt": "You are a ... Your job is to ...",
+      "tools": []
+    },
+    {
+      "id": "person_id_2",
+      "name": "Full Name / Title",
+      "role": "coder",
+      "system_prompt": "You are a ... Your job is to ...",
+      "tools": []
+    }
+  ]
 }
 ```
 
-The `system_prompt` field must:
-- Define the specialist's role and core expertise clearly
-- List preferred frameworks, tools, and languages
-- Describe the expected output format (e.g., complete code files as Markdown)
-- Be written in second person ("You are a senior X...")
-- Be thorough — this is what the agent uses to do real work\
+Each `system_prompt` must:
+- Define the person's role and expertise in second person ("You are a senior X...")
+- State their specific responsibility within the team
+- Describe expected output format (Markdown with fenced code blocks)
+- Be thorough — this drives real work\
 """
 
 
 def hr_create_team(skill_name: str, tech_context: str) -> dict:
+    """Returns dict with keys 'team' and 'persons'."""
     user = f"""\
-Create a team configuration for a specialist in: **{skill_name}**
+Create a team for a project requiring: **{skill_name}**
 
-Technology context from the project: {tech_context}
+Technology context: {tech_context}
 """
     text = _call(_HR_SYSTEM, user, config.MAX_TOKENS_HR)
     return _extract_json_block(text)
 
 
-# ── Team Agent ─────────────────────────────────────────────────────────────────
+# ── Multi-person team execution ────────────────────────────────────────────────
 
-def team_execute_task(team_system_prompt: str, task_title: str,
-                      task_description: str, project_context: str) -> str:
+def team_brief(lead_system_prompt: str, task_title: str, task_description: str,
+               project_context: str, team_members: list) -> str:
+    """Lead produces a work brief assigning sub-tasks to each team member."""
+    member_list = "\n".join(
+        f"- {m['name']} (role: {m['role']}, id: {m['id']})" for m in team_members
+    )
     user = f"""\
-## Your Task
+## Task to plan
 
 **{task_title}**
 
@@ -151,9 +176,57 @@ def team_execute_task(team_system_prompt: str, task_title: str,
 
 {project_context}
 
+## Your team members
+
+{member_list}
+
 ---
 
-Produce your complete output as Markdown. Be thorough and production-ready.
-Include file paths, complete code, and brief explanations of key decisions.
+As team lead, produce a brief that:
+1. Summarises the overall approach
+2. Assigns a specific sub-task to each team member by their name
+3. Specifies what each member should produce
+
+Format as Markdown. Be concise and directive.
 """
-    return _call(team_system_prompt, user, config.MAX_TOKENS_TEAM)
+    return _call(lead_system_prompt, user, config.MAX_TOKENS_HR)
+
+
+def person_execute(person_system_prompt: str, person_name: str, brief: str,
+                   task_title: str) -> str:
+    """A team member executes their assigned sub-task from the brief."""
+    user = f"""\
+## Team Brief for: {task_title}
+
+{brief}
+
+---
+
+You are **{person_name}**. Execute your assigned sub-task from the brief above.
+Produce complete, production-ready output as Markdown with fenced code blocks.
+"""
+    return _call(person_system_prompt, user, config.MAX_TOKENS_TEAM)
+
+
+def team_synthesize(lead_system_prompt: str, task_title: str,
+                    contributions: list) -> str:
+    """Lead synthesizes all member contributions into the final task output."""
+    contrib_text = "\n\n---\n\n".join(
+        f"### Contribution from {c['name']}\n\n{c['output']}" for c in contributions
+    )
+    user = f"""\
+## Task: {task_title}
+
+Your team has completed their individual contributions. Synthesize them into a
+single, coherent, production-ready output.
+
+## Team Contributions
+
+{contrib_text}
+
+---
+
+Produce the final unified output as Markdown. Resolve any conflicts, remove
+duplication, and ensure consistency. This is the deliverable.
+"""
+    return _call(lead_system_prompt, user, config.MAX_TOKENS_TEAM)

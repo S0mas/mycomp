@@ -1,12 +1,11 @@
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 import yaml
 
 from . import config, llm, orchestrator, registry
-from .models import CompanyState, ProjectPlan, Task, Team
+from .models import CompanyState, Person, ProjectPlan, Task, Team
 
 
 def _print_ok(msg: str) -> None:
@@ -27,6 +26,12 @@ def _print_err(msg: str) -> None:
 
 # ── init ───────────────────────────────────────────────────────────────────────
 
+def _seed_team(persons: list[Person], team: Team) -> None:
+    for p in persons:
+        registry.save_person(p)
+    registry.save_team(team)
+
+
 @click.command("init")
 def cmd_init():
     """Bootstrap the company: create state.yaml and seed starter teams."""
@@ -34,50 +39,97 @@ def cmd_init():
         _print_warn("Company already initialised. Delete company/state.yaml to reset.")
         return
 
-    state = CompanyState()
-    registry.save_state(state)
+    registry.save_state(CompanyState())
     _print_ok("Created company/state.yaml")
 
-    # Seed backend team
-    backend = Team(
-        id="backend_engineer",
+    # ── Backend team ──────────────────────────────────────────────────────────
+    backend_lead = Person(
+        id="backend_lead",
+        name="Backend Tech Lead",
+        role="lead",
+        system_prompt=(
+            "You are a Backend Tech Lead at an AI software company. "
+            "You plan backend work, assign sub-tasks to your team, and synthesize their outputs.\n\n"
+            "Your team specialises in Python, FastAPI, SQLAlchemy, PostgreSQL, and Docker.\n\n"
+            "When writing a brief: be concise, name each member explicitly, and state exactly "
+            "what they should produce. When synthesizing: resolve conflicts, deduplicate, and "
+            "produce one coherent Markdown document with all file paths and code."
+        ),
+    )
+    backend_coder = Person(
+        id="backend_coder",
         name="Backend Engineer",
+        role="coder",
+        system_prompt=(
+            "You are a senior Backend Engineer specialising in Python. "
+            "You write production-quality code using FastAPI, SQLAlchemy, and PostgreSQL.\n\n"
+            "For every task, produce:\n"
+            "1. Complete file paths with full code in fenced ```python blocks\n"
+            "2. Any required environment variables or config\n"
+            "3. One-line explanation of key design decisions\n\n"
+            "No placeholders. No TODOs. Complete, runnable code only."
+        ),
+    )
+    backend_reviewer = Person(
+        id="backend_reviewer",
+        name="Backend Code Reviewer",
+        role="reviewer",
+        system_prompt=(
+            "You are a Backend Code Reviewer. Your job is to review code produced by your team "
+            "and flag issues before synthesis.\n\n"
+            "For each piece of code, check:\n"
+            "- Correctness (logic errors, edge cases)\n"
+            "- Security (SQL injection, hardcoded secrets, missing validation)\n"
+            "- Style (naming, function size, duplication)\n"
+            "- Test coverage gaps\n\n"
+            "Produce a Markdown review with: issues found (with file + line), "
+            "suggested fixes, and a final verdict (approve / request changes)."
+        ),
+    )
+    backend_team = Team(
+        id="backend_team",
+        name="Backend Team",
         skills=["python", "rest_api", "fastapi", "sqlalchemy", "postgresql", "docker"],
-        system_prompt=(
-            "You are a senior backend engineer at an AI software company. "
-            "You write clean, production-quality Python code.\n\n"
-            "You prefer FastAPI for APIs, SQLAlchemy for ORM, PostgreSQL for databases, "
-            "and Docker for containerisation.\n\n"
-            "When asked to implement a feature or task, produce:\n"
-            "1. All necessary file paths with their complete code\n"
-            "2. Any configuration or environment variable requirements\n"
-            "3. A brief explanation of key design decisions\n\n"
-            "Format your output as Markdown with fenced code blocks "
-            "using appropriate language tags (e.g. ```python, ```yaml)."
-        ),
+        members=["backend_lead", "backend_coder", "backend_reviewer"],
+        lead_id="backend_lead",
     )
-    registry.save_team(backend)
-    _print_ok("Created company/teams/backend_engineer.yaml")
+    _seed_team([backend_lead, backend_coder, backend_reviewer], backend_team)
+    _print_ok("Created backend_team (lead + coder + reviewer)")
 
-    # Seed frontend team
-    frontend = Team(
-        id="frontend_engineer",
-        name="Frontend Engineer",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
+    # ── Frontend team ─────────────────────────────────────────────────────────
+    frontend_lead = Person(
+        id="frontend_lead",
+        name="Frontend Tech Lead",
+        role="lead",
         system_prompt=(
-            "You are a senior frontend engineer at an AI software company. "
-            "You build modern, accessible web interfaces.\n\n"
-            "You prefer React with TypeScript, Next.js for SSR/SSG, "
-            "and Tailwind CSS for styling.\n\n"
-            "When asked to implement a feature or UI component, produce:\n"
-            "1. All necessary file paths with their complete code\n"
-            "2. Component structure and prop types\n"
-            "3. A brief explanation of UX and accessibility decisions\n\n"
-            "Format your output as Markdown with fenced code blocks."
+            "You are a Frontend Tech Lead. You plan UI work, assign sub-tasks, and synthesize outputs.\n\n"
+            "Your team uses React, TypeScript, Next.js, and Tailwind CSS.\n\n"
+            "When writing a brief: name each member, state what component/file they own. "
+            "When synthesizing: produce one coherent Markdown document with all components and styles."
         ),
     )
-    registry.save_team(frontend)
-    _print_ok("Created company/teams/frontend_engineer.yaml")
+    frontend_coder = Person(
+        id="frontend_coder",
+        name="Frontend Engineer",
+        role="coder",
+        system_prompt=(
+            "You are a senior Frontend Engineer specialising in React and TypeScript.\n\n"
+            "For every task, produce:\n"
+            "1. Complete file paths with full code in fenced ```tsx or ```ts blocks\n"
+            "2. Prop types and component interfaces\n"
+            "3. Accessibility considerations\n\n"
+            "No placeholders. Complete, renderable components only."
+        ),
+    )
+    frontend_team = Team(
+        id="frontend_team",
+        name="Frontend Team",
+        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
+        members=["frontend_lead", "frontend_coder"],
+        lead_id="frontend_lead",
+    )
+    _seed_team([frontend_lead, frontend_coder], frontend_team)
+    _print_ok("Created frontend_team (lead + coder)")
 
     click.echo()
     _print_ok("Company ready. Set ANTHROPIC_API_KEY and run:")
@@ -95,11 +147,9 @@ def cmd_new_project(requirements_file: str):
 
     click.echo(f"\nAnalysing requirements: {req_path.name}")
 
-    # Load current company state
     state = registry.load_state()
     state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
 
-    # CTO analyses requirements
     click.echo("  → CTO is analysing requirements...")
     plan_dict = llm.cto_analyze(requirements_text, state_yaml)
 
@@ -113,7 +163,6 @@ def cmd_new_project(requirements_file: str):
     click.echo(f"  → Teams needed: {', '.join(teams_required)}")
     click.echo(f"  → Tasks: {len(raw_tasks)}")
 
-    # Check for missing skills / teams
     missing_team_ids = [tid for tid in teams_required if tid not in state.team_ids()]
     if missing_team_ids:
         click.echo()
@@ -122,29 +171,32 @@ def cmd_new_project(requirements_file: str):
     for team_id in missing_team_ids:
         _print_warn(f"  Team '{team_id}' not found — HR is creating it...")
         tech_context = ", ".join(tech_stack)
-        team_dict = llm.hr_create_team(team_id, tech_context)
-        # Ensure the id matches what the CTO requested
-        team_dict["id"] = team_id
-        team = Team.from_dict(team_dict)
-        registry.save_team(team)
-        _print_ok(f"  Created team: {team.name} ({team.id})")
+        result = llm.hr_create_team(team_id, tech_context)
 
-        # Update technologies_seen
+        # HR now returns {"team": {...}, "persons": [...]}
+        team_data = result.get("team", result)
+        persons_data = result.get("persons", [])
+
+        team_data["id"] = team_id
+        team = Team.from_dict(team_data)
+
+        for pd in persons_data:
+            registry.save_person(Person.from_dict(pd))
+        registry.save_team(team)
+
+        _print_ok(f"  Created team: {team.name} with {len(persons_data)} person(s)")
         state = registry.load_state()
 
-    # Update technologies_seen in state
     state = registry.load_state()
     for tech in tech_stack:
         if tech.lower() not in [t.lower() for t in state.technologies_seen]:
             state.technologies_seen.append(tech)
     registry.save_state(state)
 
-    # Build Project
     project_id = f"proj_{uuid.uuid4().hex[:8]}"
     tasks = []
     for i, raw in enumerate(raw_tasks):
         task_id = raw.get("id", f"task_{i+1:03d}")
-        output_file = f"outputs/{task_id}.md"
         tasks.append(Task(
             id=task_id,
             title=raw["title"],
@@ -152,7 +204,7 @@ def cmd_new_project(requirements_file: str):
             assigned_team=raw["assigned_team"],
             depends_on=raw.get("depends_on", []),
             is_checkpoint=raw.get("is_checkpoint", False),
-            output_file=output_file,
+            output_file=f"outputs/{task_id}.md",
         ))
 
     plan = ProjectPlan(
@@ -217,19 +269,14 @@ def cmd_status(project_id: str | None):
     click.echo()
     click.echo("Tasks:")
 
-    _status_color = {
-        "done": "green",
-        "failed": "red",
-        "running": "yellow",
-        "pending": "white",
-    }
-
+    _status_color = {"done": "green", "failed": "red", "running": "yellow", "pending": "white"}
     for t in plan.tasks:
         color = _status_color.get(t.status, "white")
         checkpoint_marker = " [CHECKPOINT]" if t.is_checkpoint else ""
         deps = f" (deps: {', '.join(t.depends_on)})" if t.depends_on else ""
-        line = f"  {t.id}  [{t.status}]  {t.title}{checkpoint_marker}{deps}"
-        click.echo(click.style(line, fg=color))
+        click.echo(click.style(
+            f"  {t.id}  [{t.status}]  {t.title}{checkpoint_marker}{deps}", fg=color
+        ))
 
 
 # ── root group ─────────────────────────────────────────────────────────────────

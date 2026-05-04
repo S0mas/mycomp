@@ -56,7 +56,8 @@ class TestLoadSaveTeam:
         loaded = registry.load_team(sample_team.id)
         assert loaded.id == sample_team.id
         assert loaded.skills == sample_team.skills
-        assert loaded.system_prompt == sample_team.system_prompt
+        assert loaded.members == sample_team.members
+        assert loaded.lead_id == sample_team.lead_id
 
     def test_save_team_syncs_state(self, sample_state):
         # Start with a state that has no teams
@@ -67,7 +68,8 @@ class TestLoadSaveTeam:
             id="devops_engineer",
             name="DevOps Engineer",
             skills=["docker", "kubernetes"],
-            system_prompt="You are a DevOps engineer.",
+            members=["devops_lead"],
+            lead_id="devops_lead",
         )
         registry.save_team(new_team)
 
