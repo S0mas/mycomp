@@ -195,16 +195,16 @@ class TestNewProject:
         runner.invoke(cli, ["init"])
         with patch("aicompany.cli.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = low_eval
-            result = runner.invoke(cli, ["new-project", requirements_file])
+            result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
         assert result.exit_code == 1
         assert "Cannot proceed" in result.output
 
     def test_hard_block_on_single_low_dimension(self, runner, requirements_file):
-        low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 1}
+        low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 2}
         runner.invoke(cli, ["init"])
         with patch("aicompany.cli.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = low_eval
-            result = runner.invoke(cli, ["new-project", requirements_file])
+            result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
         assert result.exit_code == 1
         assert "Clarity" in result.output
 
@@ -213,9 +213,20 @@ class TestNewProject:
         runner.invoke(cli, ["init"])
         with patch("aicompany.cli.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = reject_eval
-            result = runner.invoke(cli, ["new-project", requirements_file])
+            result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
         assert result.exit_code == 1
         assert "REJECT" in result.output
+
+    def test_autofix_saves_fixed_file(self, runner, requirements_file):
+        low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 2, "verdict": "needs_work"}
+        runner.invoke(cli, ["init"])
+        with patch("aicompany.cli.llm") as mock_llm:
+            mock_llm.evaluate_requirements.return_value = low_eval
+            mock_llm.autofix_requirements.return_value = "# Improved Requirements\n\nBuild a REST API."
+            result = runner.invoke(cli, ["new-project", requirements_file], input="y\n")
+        assert result.exit_code == 1
+        assert "Improved requirements saved" in result.output
+        mock_llm.autofix_requirements.assert_called_once()
 
 
 # ── run ────────────────────────────────────────────────────────────────────────

@@ -159,6 +159,50 @@ Evaluate these requirements. Be honest and constructive.
     return _extract_json_block(text)
 
 
+# ── Autofix ────────────────────────────────────────────────────────────────────
+
+_AUTOFIX_SYSTEM = """\
+You are a requirements-engineering expert. You receive a client's requirements
+document that was evaluated and found lacking. You also receive the evaluation
+(scores, risks, suggestions).
+
+Your job: rewrite the requirements into a **complete, clear, actionable** document
+that would score 4+ on clarity, completeness, and feasibility. Preserve the
+client's original intent — do NOT invent features they didn't ask for. Instead:
+
+- Fill in obvious gaps (e.g. add error handling if not mentioned)
+- Clarify ambiguities by picking reasonable defaults and marking them with [ASSUMED]
+- Add acceptance criteria where missing
+- Structure into clear sections (Overview, Features, Constraints, Acceptance Criteria)
+
+Output ONLY the improved requirements as a Markdown document — no JSON, no commentary.
+"""
+
+
+def autofix_requirements(
+    requirements_text: str,
+    evaluation_dict: dict,
+) -> str:
+    """Rewrite requirements to fix evaluation issues. Returns improved Markdown text."""
+    user = f"""\
+## Original Requirements
+
+{requirements_text}
+
+## Evaluation Results
+
+- Clarity: {evaluation_dict.get('clarity', '?')}/5
+- Completeness: {evaluation_dict.get('completeness', '?')}/5
+- Feasibility: {evaluation_dict.get('feasibility', '?')}/5
+- Risks: {', '.join(evaluation_dict.get('risks', []))}
+- Suggestions: {', '.join(evaluation_dict.get('suggestions', []))}
+- Summary: {evaluation_dict.get('summary', '')}
+
+Rewrite the requirements to address all issues. Mark any assumptions with [ASSUMED].
+"""
+    return _call(_AUTOFIX_SYSTEM, user, config.MAX_TOKENS_AUTOFIX)
+
+
 # ── HR ─────────────────────────────────────────────────────────────────────────
 
 _HR_SYSTEM = """\

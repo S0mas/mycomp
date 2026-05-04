@@ -270,29 +270,71 @@ def cmd_new_project(requirements_file: str):
 
     # ── Hard block on critical gaps ───────────────────────────────────────────
     blockers = []
+    fix_hints = {
+        "Clarity": "Break vague statements into specific, testable requirements. "
+                   "Replace 'should handle many users' with 'must support 1000 concurrent connections'.",
+        "Completeness": "Add missing sections: acceptance criteria, error handling, "
+                        "authentication, deployment constraints, data model, API contracts.",
+        "Feasibility": "Reduce scope to a realistic first iteration. Split into phases. "
+                       "Remove dependencies on unavailable technologies or unrealistic timelines.",
+    }
+
     if evaluation.overall_score < config.MIN_SCORE_TO_PROCEED:
         blockers.append(
-            f"Overall score {evaluation.overall_score:.1f} is below minimum "
-            f"{config.MIN_SCORE_TO_PROCEED}."
+            f"Overall score {evaluation.overall_score:.1f}/5 is below minimum "
+            f"{config.MIN_SCORE_TO_PROCEED}. The requirements need significant improvement."
         )
     for label, score in [("Clarity", evaluation.clarity),
                          ("Completeness", evaluation.completeness),
                          ("Feasibility", evaluation.feasibility)]:
         if score < config.MIN_DIMENSION_SCORE:
             blockers.append(
-                f"{label} score {score}/5 is below minimum "
-                f"{config.MIN_DIMENSION_SCORE}."
+                f"{label} scored {score}/5 (minimum {config.MIN_DIMENSION_SCORE}). "
+                f"Fix: {fix_hints[label]}"
             )
     if evaluation.verdict == "reject":
-        blockers.append("Evaluation verdict is REJECT.")
+        blockers.append(
+            "Evaluation verdict is REJECT — the input is fundamentally unsuitable. "
+            "Ensure it describes a software project with clear deliverables."
+        )
 
     if blockers:
         click.echo()
         _print_err("Cannot proceed — critical gaps in requirements:")
         for b in blockers:
+            click.echo()
             _print_err(f"  • {b}")
+
+        if evaluation.risks:
+            click.echo()
+            _print_warn("Identified risks:")
+            for r in evaluation.risks:
+                _print_warn(f"    ‣ {r}")
+
+        if evaluation.suggestions:
+            click.echo()
+            _print_info("Suggestions from evaluation:")
+            for s in evaluation.suggestions:
+                _print_info(f"    ‣ {s}")
+
+        # ── Offer autofix ─────────────────────────────────────────────────────
         click.echo()
-        _print_info(f"Fix the requirements and re-run:  python main.py new-project {requirements_file}")
+        if click.confirm(click.style(
+            "Would you like AI to auto-fix the requirements?", fg="cyan"
+        )):
+            click.echo("  → Generating improved requirements...")
+            fixed_text = llm.autofix_requirements(requirements_text, eval_dict)
+            fixed_path = req_path.with_stem(req_path.stem + "_fixed")
+            fixed_path.write_text(fixed_text, encoding="utf-8")
+            click.echo()
+            _print_ok(f"Improved requirements saved to: {fixed_path}")
+            _print_info("Review the file, then re-run:")
+            _print_info(f"    python main.py new-project {fixed_path}")
+        else:
+            click.echo()
+            _print_info(f"Fix the requirements manually and re-run:")
+            _print_info(f"    python main.py new-project {requirements_file}")
+
         raise SystemExit(1)
 
     _print_ok("Requirements passed evaluation — proceeding.")

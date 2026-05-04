@@ -20,7 +20,7 @@ class TestValidateRequirementsText:
         assert any("too short" in e for e in errors)
 
     def test_null_bytes(self):
-        errors = validate_requirements_text("a" * 30 + "\x00")
+        errors = validate_requirements_text("a" * 60 + "\x00")
         assert any("binary" in e for e in errors)
 
     def test_valid(self):
