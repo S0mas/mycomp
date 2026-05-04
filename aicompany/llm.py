@@ -1,23 +1,27 @@
 import json
 import re
+from pathlib import Path
 
 from . import config
 from .llm_backend import LLMBackend, create_backend
 
-_backend: LLMBackend | None = None
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+def _load_prompt(name: str) -> str:
+    """Load a system prompt template from the prompts/ directory."""
+    return (_PROMPTS_DIR / f"{name}.txt").read_text(encoding="utf-8").strip()
 
 
 def _get_backend() -> LLMBackend:
-    global _backend
-    if _backend is None:
-        # Import backends package to trigger auto-registration
-        from . import backends  # noqa: F401
-        _backend = create_backend(config.LLM_BACKEND)
-    return _backend
+    """Create a fresh backend instance. No global state."""
+    from . import backends  # noqa: F401 — trigger auto-registration
+    return create_backend(config.LLM_BACKEND)
 
 
-def _call(system: str, user: str, max_tokens: int) -> str:
-    return _get_backend().call(system, user, max_tokens, config.MODEL)
+def _call(system: str, user: str, max_tokens: int, backend: LLMBackend | None = None) -> str:
+    b = backend or _get_backend()
+    return b.call(system, user, max_tokens, config.MODEL)
 
 
 def _extract_json_block(text: str) -> dict:
@@ -35,46 +39,6 @@ def _extract_json_block(text: str) -> dict:
 
 # ── CTO ────────────────────────────────────────────────────────────────────────
 
-_CTO_SYSTEM = """\
-You are the CTO of an AI-driven software company. Your job is to analyze a client's
-requirements and produce a precise, structured project plan.
-
-You have access to the company's current team registry (skills available). Reuse
-existing team IDs wherever their skills match. Only list teams in `teams_required`
-that are genuinely needed.
-
-Output ONLY a JSON block (```json ... ```) with EXACTLY this schema — no prose before
-or after:
-
-```json
-{
-  "title": "Short project title (max 60 chars)",
-  "tech_stack": ["technology1", "technology2"],
-  "teams_required": ["team_id1", "team_id2"],
-  "tasks": [
-    {
-      "id": "task_001",
-      "title": "Task title",
-      "description": "Detailed description of what needs to be done and expected output",
-      "assigned_team": "team_id",
-      "depends_on": [],
-      "is_checkpoint": false
-    }
-  ]
-}
-```
-
-Rules:
-- team IDs must be snake_case (e.g., backend_team, frontend_team)
-- Reuse existing team IDs from the registry when their skills match the task
-- Mark `is_checkpoint: true` for tasks involving: external services, deployment,
-  payment/billing systems, security configuration, or any irreversible production action
-- Task IDs must be sequential: task_001, task_002, ...
-- `depends_on` lists task IDs that must complete before this task starts
-- Keep tasks focused and achievable by one team in one session
-- 4 to 10 tasks is typical; avoid over-splitting trivial work\
-"""
-
 
 def cto_analyze(requirements_text: str, company_state_yaml: str) -> dict:
     user = f"""\
@@ -88,51 +52,11 @@ def cto_analyze(requirements_text: str, company_state_yaml: str) -> dict:
 {company_state_yaml}
 ```
 """
-    text = _call(_CTO_SYSTEM, user, config.MAX_TOKENS_CTO)
+    text = _call(_load_prompt("cto_system"), user, config.MAX_TOKENS_CTO)
     return _extract_json_block(text)
 
 
 # ── Requirements evaluation ───────────────────────────────────────────────────
-
-_EVAL_SYSTEM = """\
-You are a senior Business Analyst at an AI-driven software company. Your job is to
-evaluate client requirements documents BEFORE they go to the CTO for planning.
-
-Score each dimension from 1 (very poor) to 5 (excellent):
-- **clarity**: Are the requirements clear and unambiguous? Can an engineer read them and know exactly what to build?
-- **completeness**: Do they cover scope, constraints, acceptance criteria, edge cases? Or are major pieces missing?
-- **feasibility**: Given that an AI team of coders and reviewers will implement this, is the scope realistic for a single project?
-
-Identify specific **risks** — things that could cause the project to fail, stall, or deliver the wrong thing.
-
-Provide actionable **suggestions** — specific improvements the client could make to the requirements.
-
-Set **verdict** to:
-- "proceed" — requirements are good enough to plan (scores mostly 3+, no critical risks)
-- "needs_work" — requirements have gaps that should be fixed first (any score below 3, or critical risks)
-- "reject" — requirements are fundamentally unsuitable (incoherent, empty, or not a software project)
-
-Output ONLY a JSON block (```json ... ```) with EXACTLY this schema — no prose:
-
-```json
-{
-  "clarity": 4,
-  "completeness": 3,
-  "feasibility": 5,
-  "risks": [
-    "No authentication requirements specified — security gap",
-    "Database choice not mentioned — may cause rework"
-  ],
-  "suggestions": [
-    "Add acceptance criteria for each feature",
-    "Specify target deployment environment"
-  ],
-  "summary": "One paragraph overall assessment of the requirements.",
-  "verdict": "proceed"
-}
-```\
-"""
-
 
 def evaluate_requirements(requirements_text: str, company_state_yaml: str) -> dict:
     """Evaluate requirements before CTO planning. Returns evaluation dict."""
@@ -149,28 +73,11 @@ def evaluate_requirements(requirements_text: str, company_state_yaml: str) -> di
 
 Evaluate these requirements. Be honest and constructive.
 """
-    text = _call(_EVAL_SYSTEM, user, config.MAX_TOKENS_EVAL)
+    text = _call(_load_prompt("eval_system"), user, config.MAX_TOKENS_EVAL)
     return _extract_json_block(text)
 
 
 # ── Autofix ────────────────────────────────────────────────────────────────────
-
-_AUTOFIX_SYSTEM = """\
-You are a requirements-engineering expert. You receive a client's requirements
-document that was evaluated and found lacking. You also receive the evaluation
-(scores, risks, suggestions).
-
-Your job: rewrite the requirements into a **complete, clear, actionable** document
-that would score 4+ on clarity, completeness, and feasibility. Preserve the
-client's original intent — do NOT invent features they didn't ask for. Instead:
-
-- Fill in obvious gaps (e.g. add error handling if not mentioned)
-- Clarify ambiguities by picking reasonable defaults and marking them with [ASSUMED]
-- Add acceptance criteria where missing
-- Structure into clear sections (Overview, Features, Constraints, Acceptance Criteria)
-
-Output ONLY the improved requirements as a Markdown document — no JSON, no commentary.
-"""
 
 
 def autofix_requirements(
@@ -194,70 +101,10 @@ def autofix_requirements(
 
 Rewrite the requirements to address all issues. Mark any assumptions with [ASSUMED].
 """
-    return _call(_AUTOFIX_SYSTEM, user, config.MAX_TOKENS_AUTOFIX)
+    return _call(_load_prompt("autofix_system"), user, config.MAX_TOKENS_AUTOFIX)
 
 
 # ── HR ─────────────────────────────────────────────────────────────────────────
-
-_HR_SYSTEM = """\
-You are the Head of HR at an AI-driven software company. A "team" is a group of
-specialist AI agents (persons) who collaborate on tasks. Each person has a specific
-role: lead, coder, reviewer, architect, or specialist.
-
-Each person has structured context instead of a monolithic system prompt:
-- `identity`: a short, stable description ("You are a senior X...")
-- `skills`: list of skill IDs they reference from the shared skill registry
-- `knowledge`: person-specific things they know (learned over time)
-- `rules`: behavioural rules — how they work and communicate
-
-When asked to create a team for a skill, design 2-4 persons that together cover the
-work. One person must have role "lead" — they coordinate the others.
-Also define any new skills that the team needs (if they don't already exist).
-
-Output ONLY a JSON block (```json ... ```) with EXACTLY this schema — no prose:
-
-```json
-{
-  "team": {
-    "id": "snake_case_team_id",
-    "name": "Human Readable Team Name",
-    "skills": ["skill_id_1", "skill_id_2"],
-    "members": ["person_id_1", "person_id_2"],
-    "lead_id": "person_id_1"
-  },
-  "persons": [
-    {
-      "id": "person_id_1",
-      "name": "Full Name / Title",
-      "role": "lead",
-      "identity": "You are a ... Your job is to ...",
-      "skills": ["skill_id_1", "skill_id_2"],
-      "knowledge": ["Person-specific knowledge item"],
-      "rules": ["How this person works and communicates"],
-      "tools": []
-    }
-  ],
-  "skills": [
-    {
-      "id": "skill_id_1",
-      "name": "Human Readable Skill Name",
-      "category": "language|framework|tool|practice",
-      "knowledge": [
-        "Technical fact that anyone with this skill should know",
-        "Another piece of knowledge"
-      ]
-    }
-  ]
-}
-```
-
-Rules for person context:
-- `identity` must define the person's role in second person ("You are a senior X...")
-- `skills` must reference skill IDs defined in the `skills` array or existing in the registry
-- `knowledge` contains person-specific experience — NOT duplicated from skills
-- `rules` define output format, communication style, and behavioural constraints
-- Be thorough — this drives real work\
-"""
 
 
 def hr_create_team(skill_name: str, tech_context: str) -> dict:
@@ -267,5 +114,5 @@ Create a team for a project requiring: **{skill_name}**
 
 Technology context: {tech_context}
 """
-    text = _call(_HR_SYSTEM, user, config.MAX_TOKENS_HR)
+    text = _call(_load_prompt("hr_system"), user, config.MAX_TOKENS_HR)
     return _extract_json_block(text)

@@ -4,9 +4,11 @@ from pathlib import Path
 import click
 import yaml
 
-from . import config, llm, orchestrator, registry
+from . import config, orchestrator, registry
 from .models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team
+from .seeds import default_skills, default_teams
 from .validation import ValidationError, validate_requirements_text, validate_cto_plan, validate_hr_response
+from .workflow import evaluate_and_gate, plan_and_create_project
 
 
 def _print_ok(msg: str) -> None:
@@ -48,163 +50,14 @@ def cmd_init():
     registry.save_state(CompanyState())
     _print_ok("Created company/state.yaml")
 
-    # ── Shared skills ─────────────────────────────────────────────────────────
-    skills = [
-        Skill(id="python", name="Python", category="language", knowledge=[
-            "Use type hints on all function signatures",
-            "Prefer pathlib over os.path for file operations",
-            "Use dataclasses or Pydantic for structured data",
-            "Follow PEP 8 naming conventions",
-        ]),
-        Skill(id="fastapi", name="FastAPI", category="framework", knowledge=[
-            "Use async def for route handlers",
-            "Use Pydantic models for request/response validation",
-            "Use Depends() for dependency injection",
-            "Always set response_model for automatic serialization",
-        ]),
-        Skill(id="sqlalchemy", name="SQLAlchemy", category="framework", knowledge=[
-            "Use SQLAlchemy 2.0 select() style, not legacy Query",
-            "Define models with mapped_column() for type safety",
-            "Use sessionmaker with context managers for transaction safety",
-        ]),
-        Skill(id="postgresql", name="PostgreSQL", category="tool", knowledge=[
-            "Use migrations (Alembic) for schema changes — never raw DDL in code",
-            "Add indexes on foreign keys and frequently filtered columns",
-        ]),
-        Skill(id="docker", name="Docker", category="tool", knowledge=[
-            "Use multi-stage builds to minimize image size",
-            "Never store secrets in image layers",
-            "Pin base image versions for reproducibility",
-        ]),
-        Skill(id="react", name="React", category="framework", knowledge=[
-            "Use functional components with hooks, not class components",
-            "Prefer controlled components for form inputs",
-            "Use React.memo() and useMemo() only when profiling shows a need",
-        ]),
-        Skill(id="typescript", name="TypeScript", category="language", knowledge=[
-            "Always define explicit types for function parameters and return values",
-            "Use interfaces for object shapes and type aliases for unions",
-            "Avoid 'any' — use 'unknown' and narrow with type guards",
-        ]),
-        Skill(id="nextjs", name="Next.js", category="framework", knowledge=[
-            "Use app router (app/) not pages router for new projects",
-            "Use server components by default, add 'use client' only when needed",
-            "Use next/image for automatic image optimization",
-        ]),
-        Skill(id="tailwind", name="Tailwind CSS", category="framework", knowledge=[
-            "Use utility classes directly — avoid @apply in most cases",
-            "Use the design system (spacing, colors) consistently",
-        ]),
-        Skill(id="rest_api", name="REST API Design", category="practice", knowledge=[
-            "Use proper HTTP methods: GET for reads, POST for creates, PUT/PATCH for updates",
-            "Return appropriate status codes: 201 for created, 404 for not found, 422 for validation errors",
-            "Version APIs in the URL path: /api/v1/",
-        ]),
-        Skill(id="html", name="HTML", category="language", knowledge=[
-            "Use semantic elements (header, main, nav, section) not just divs",
-            "Always include alt text on images",
-        ]),
-        Skill(id="css", name="CSS", category="language", knowledge=[
-            "Use flexbox and grid for layout, not floats",
-            "Use CSS custom properties (variables) for theming",
-        ]),
-    ]
+    skills = default_skills()
     _seed_skills(skills)
     _print_ok(f"Created {len(skills)} shared skills")
 
-    # ── Backend team ──────────────────────────────────────────────────────────
-    backend_lead = Person(
-        id="backend_lead",
-        name="Backend Tech Lead",
-        role="lead",
-        identity="You are a Backend Tech Lead at an AI software company.",
-        skills=["python", "fastapi", "sqlalchemy", "postgresql", "docker", "rest_api"],
-        knowledge=[
-            "You plan backend work, assign sub-tasks to your team, and synthesize their outputs",
-            "Your team specialises in Python, FastAPI, SQLAlchemy, PostgreSQL, and Docker",
-        ],
-        rules=[
-            "When writing a brief: be concise, name each member explicitly, and state exactly what they should produce",
-            "When synthesizing: resolve conflicts, deduplicate, and produce one coherent Markdown document with all file paths and code",
-        ],
-    )
-    backend_coder = Person(
-        id="backend_coder",
-        name="Backend Engineer",
-        role="coder",
-        identity="You are a senior Backend Engineer specialising in Python.",
-        skills=["python", "fastapi", "sqlalchemy", "postgresql"],
-        knowledge=[],
-        rules=[
-            "For every task, produce complete file paths with full code in fenced ```python blocks",
-            "Include any required environment variables or config",
-            "Include one-line explanation of key design decisions",
-            "No placeholders. No TODOs. Complete, runnable code only",
-        ],
-    )
-    backend_reviewer = Person(
-        id="backend_reviewer",
-        name="Backend Code Reviewer",
-        role="reviewer",
-        identity="You are a Backend Code Reviewer.",
-        skills=["python", "fastapi", "sqlalchemy"],
-        knowledge=[
-            "Your job is to review code produced by your team and flag issues before synthesis",
-        ],
-        rules=[
-            "For each piece of code, check: correctness (logic errors, edge cases), security (SQL injection, hardcoded secrets, missing validation), style (naming, function size, duplication), test coverage gaps",
-            "Produce a Markdown review with: issues found (with file + line), suggested fixes, and a final verdict (approve / request changes)",
-        ],
-    )
-    backend_team = Team(
-        id="backend_team",
-        name="Backend Team",
-        skills=["python", "rest_api", "fastapi", "sqlalchemy", "postgresql", "docker"],
-        members=["backend_lead", "backend_coder", "backend_reviewer"],
-        lead_id="backend_lead",
-    )
-    _seed_team([backend_lead, backend_coder, backend_reviewer], backend_team)
-    _print_ok("Created backend_team (lead + coder + reviewer)")
-
-    # ── Frontend team ─────────────────────────────────────────────────────────
-    frontend_lead = Person(
-        id="frontend_lead",
-        name="Frontend Tech Lead",
-        role="lead",
-        identity="You are a Frontend Tech Lead.",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
-        knowledge=[
-            "You plan UI work, assign sub-tasks, and synthesize outputs",
-            "Your team uses React, TypeScript, Next.js, and Tailwind CSS",
-        ],
-        rules=[
-            "When writing a brief: name each member, state what component/file they own",
-            "When synthesizing: produce one coherent Markdown document with all components and styles",
-        ],
-    )
-    frontend_coder = Person(
-        id="frontend_coder",
-        name="Frontend Engineer",
-        role="coder",
-        identity="You are a senior Frontend Engineer specialising in React and TypeScript.",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
-        knowledge=[],
-        rules=[
-            "For every task, produce complete file paths with full code in fenced ```tsx or ```ts blocks",
-            "Include prop types and component interfaces",
-            "Include accessibility considerations",
-            "No placeholders. Complete, renderable components only",
-        ],
-    )
-    frontend_team = Team(
-        id="frontend_team",
-        name="Frontend Team",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
-        members=["frontend_lead", "frontend_coder"],
-        lead_id="frontend_lead",
-    )
-    _seed_team([frontend_lead, frontend_coder], frontend_team)
-    _print_ok("Created frontend_team (lead + coder)")
+    for persons, team in default_teams():
+        _seed_team(persons, team)
+        member_roles = " + ".join(p.role for p in persons)
+        _print_ok(f"Created {team.id} ({member_roles})")
 
     click.echo()
     _print_ok("Company ready. Configure your LLM backend and run:")
@@ -263,58 +116,27 @@ def cmd_new_project(requirements_file: str):
 
     # ── Evaluate requirements ─────────────────────────────────────────────────
     click.echo("  → Evaluating requirements quality...")
-    eval_dict = llm.evaluate_requirements(requirements_text, state_yaml)
-    evaluation = RequirementsEvaluation.from_dict(eval_dict)
-
-    _print_evaluation(evaluation)
+    result = evaluate_and_gate(requirements_text, state_yaml)
+    _print_evaluation(result.evaluation)
 
     # ── Hard block on critical gaps ───────────────────────────────────────────
-    blockers = []
-    fix_hints = {
-        "Clarity": "Break vague statements into specific, testable requirements. "
-                   "Replace 'should handle many users' with 'must support 1000 concurrent connections'.",
-        "Completeness": "Add missing sections: acceptance criteria, error handling, "
-                        "authentication, deployment constraints, data model, API contracts.",
-        "Feasibility": "Reduce scope to a realistic first iteration. Split into phases. "
-                       "Remove dependencies on unavailable technologies or unrealistic timelines.",
-    }
-
-    if evaluation.overall_score < config.MIN_SCORE_TO_PROCEED:
-        blockers.append(
-            f"Overall score {evaluation.overall_score:.1f}/5 is below minimum "
-            f"{config.MIN_SCORE_TO_PROCEED}. The requirements need significant improvement."
-        )
-    for label, score in [("Clarity", evaluation.clarity),
-                         ("Completeness", evaluation.completeness),
-                         ("Feasibility", evaluation.feasibility)]:
-        if score < config.MIN_DIMENSION_SCORE:
-            blockers.append(
-                f"{label} scored {score}/5 (minimum {config.MIN_DIMENSION_SCORE}). "
-                f"Fix: {fix_hints[label]}"
-            )
-    if evaluation.verdict == "reject":
-        blockers.append(
-            "Evaluation verdict is REJECT — the input is fundamentally unsuitable. "
-            "Ensure it describes a software project with clear deliverables."
-        )
-
-    if blockers:
+    if result.blocked:
         click.echo()
         _print_err("Cannot proceed — critical gaps in requirements:")
-        for b in blockers:
+        for b in result.blockers:
             click.echo()
             _print_err(f"  • {b}")
 
-        if evaluation.risks:
+        if result.evaluation.has_risks:
             click.echo()
             _print_warn("Identified risks:")
-            for r in evaluation.risks:
+            for r in result.evaluation.risks:
                 _print_warn(f"    ‣ {r}")
 
-        if evaluation.suggestions:
+        if result.evaluation.suggestions:
             click.echo()
             _print_info("Suggestions from evaluation:")
-            for s in evaluation.suggestions:
+            for s in result.evaluation.suggestions:
                 _print_info(f"    ‣ {s}")
 
         # ── Offer autofix ─────────────────────────────────────────────────────
@@ -323,7 +145,10 @@ def cmd_new_project(requirements_file: str):
             "Would you like AI to auto-fix the requirements?", fg="cyan"
         )):
             click.echo("  → Generating improved requirements...")
-            fixed_text = llm.autofix_requirements(requirements_text, eval_dict)
+            from .workflow import autofix_requirements
+            fixed_text = autofix_requirements(
+                requirements_text, result.evaluation.to_dict(),
+            )
             fixed_path = req_path.with_stem(req_path.stem + "_fixed")
             fixed_path.write_text(fixed_text, encoding="utf-8")
             click.echo()
@@ -339,98 +164,40 @@ def cmd_new_project(requirements_file: str):
 
     _print_ok("Requirements passed evaluation — proceeding.")
 
-    # ── CTO planning ──────────────────────────────────────────────────────────
-    click.echo("  → CTO is analysing requirements...")
-    plan_dict = llm.cto_analyze(requirements_text, state_yaml)
+    # ── CTO planning + HR + project creation ──────────────────────────────────
+    plan_result = plan_and_create_project(
+        requirements_text, state_yaml,
+        on_status=lambda msg: click.echo(f"  → {msg}"),
+    )
 
-    plan_errors = validate_cto_plan(plan_dict)
-    if plan_errors:
+    if plan_result.plan_warnings:
         _print_warn("CTO plan has issues:")
-        for e in plan_errors:
+        for e in plan_result.plan_warnings:
             _print_err(f"  {e}")
         _print_warn("Proceeding with best-effort plan...")
 
-    title = plan_dict.get("title", "Untitled Project")
-    tech_stack = plan_dict.get("tech_stack", [])
-    teams_required = plan_dict.get("teams_required", [])
-    raw_tasks = plan_dict.get("tasks", [])
+    for team_id, warnings in plan_result.hr_warnings.items():
+        _print_warn(f"HR response for '{team_id}' has issues:")
+        for w in warnings:
+            _print_err(f"    {w}")
+        _print_warn("Proceeding with best-effort team...")
 
-    click.echo(f"  → Plan: \"{title}\"")
-    click.echo(f"  → Tech stack: {', '.join(tech_stack)}")
-    click.echo(f"  → Teams needed: {', '.join(teams_required)}")
-    click.echo(f"  → Tasks: {len(raw_tasks)}")
+    plan = plan_result.plan
+    click.echo(f"  → Plan: \"{plan.title}\"")
+    click.echo(f"  → Tech stack: {', '.join(plan.tech_stack)}")
+    click.echo(f"  → Teams needed: {', '.join(plan.teams_required)}")
+    click.echo(f"  → Tasks: {len(plan.tasks)}")
 
-    missing_team_ids = [tid for tid in teams_required if tid not in state.team_ids()]
-    if missing_team_ids:
-        click.echo()
-        click.echo(f"  Creating {len(missing_team_ids)} missing team(s)...")
-
-    for team_id in missing_team_ids:
-        _print_warn(f"  Team '{team_id}' not found — HR is creating it...")
-        tech_context = ", ".join(tech_stack)
-        result = llm.hr_create_team(team_id, tech_context)
-
-        # HR returns {"team": {...}, "persons": [...], "skills": [...]}
-        team_data = result.get("team", result)
-        persons_data = result.get("persons", [])
-        skills_data = result.get("skills", [])
-
-        hr_errors = validate_hr_response(result, team_id)
-        if hr_errors:
-            _print_warn(f"  HR response for '{team_id}' has issues:")
-            for e in hr_errors:
-                _print_err(f"    {e}")
-            _print_warn("  Proceeding with best-effort team...")
-
-        team_data["id"] = team_id
-        team = Team.from_dict(team_data)
-
-        for sd in skills_data:
-            registry.save_skill(Skill.from_dict(sd))
-        for pd in persons_data:
-            registry.save_person(Person.from_dict(pd))
-        registry.save_team(team)
-
-        _print_ok(f"  Created team: {team.name} with {len(persons_data)} person(s)")
-        state = registry.load_state()
-
-    state = registry.load_state()
-    for tech in tech_stack:
-        if tech.lower() not in [t.lower() for t in state.technologies_seen]:
-            state.technologies_seen.append(tech)
-    registry.save_state(state)
-
-    project_id = f"proj_{uuid.uuid4().hex[:8]}"
-    tasks = []
-    for i, raw in enumerate(raw_tasks):
-        task_id = raw.get("id", f"task_{i+1:03d}")
-        tasks.append(Task(
-            id=task_id,
-            title=raw["title"],
-            description=raw["description"],
-            assigned_team=raw["assigned_team"],
-            depends_on=raw.get("depends_on", []),
-            is_checkpoint=raw.get("is_checkpoint", False),
-            output_file=f"outputs/{task_id}.md",
-        ))
-
-    plan = ProjectPlan(
-        project_id=project_id,
-        title=title,
-        tech_stack=tech_stack,
-        teams_required=teams_required,
-        tasks=tasks,
-    )
-
-    registry.create_project_dir(project_id, requirements_text)
-    registry.save_plan(plan)
+    if plan_result.created_teams:
+        for tid in plan_result.created_teams:
+            _print_ok(f"  Created team: {tid}")
 
     click.echo()
-    _print_ok(f"Project created: {project_id}")
-    _print_info(f"Plan: projects/{project_id}/plan.yaml")
+    _print_ok(f"Project created: {plan_result.project_id}")
+    _print_info(f"Plan: projects/{plan_result.project_id}/plan.yaml")
     click.echo()
     click.echo("Review the plan, then run:")
-    click.echo(f"    python main.py run {project_id}")
+    click.echo(f"    python main.py run {plan_result.project_id}")
 
 
 # ── run ────────────────────────────────────────────────────────────────────────

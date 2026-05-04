@@ -38,6 +38,12 @@ def load_person(person_id: str) -> Person:
 
 
 def save_person(person: Person) -> None:
+    """
+    Persist a Person to disk and register it in state.yaml.
+
+    Side effect: if this person ID is new, it is appended to state.yaml's
+    persons list. This keeps the central registry in sync automatically.
+    """
     _persons_dir().mkdir(parents=True, exist_ok=True)
     path = _persons_dir() / f"{person.id}.yaml"
     with path.open("w") as f:
@@ -62,6 +68,12 @@ def load_skill(skill_id: str) -> Skill:
 
 
 def save_skill(skill: Skill) -> None:
+    """
+    Persist a Skill to disk and register it in state.yaml.
+
+    Side effect: if this skill ID is new, it is appended to state.yaml's
+    skills list. This keeps the central registry in sync automatically.
+    """
     config.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     path = config.SKILLS_DIR / f"{skill.id}.yaml"
     with path.open("w") as f:
@@ -107,6 +119,12 @@ def load_team_with_members(team_id: str) -> tuple[Team, Person, list[Person], di
 
 
 def save_team(team: Team) -> None:
+    """
+    Persist a Team to disk and register it in state.yaml.
+
+    Side effect: if this team ID is new, it is appended to state.yaml's
+    teams list. This keeps the central registry in sync automatically.
+    """
     config.TEAMS_DIR.mkdir(parents=True, exist_ok=True)
     path = config.TEAMS_DIR / f"{team.id}.yaml"
     with path.open("w") as f:

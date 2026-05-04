@@ -58,18 +58,21 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 ```
 aicompany/          core package
   config.py         paths + env vars + backend selection
-  models.py         dataclasses (Skill, Person, Team, Task, ProjectPlan, CompanyState, RequirementsEvaluation) + build_prompt()
-  llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain)
-  reasoner.py       LLMReasoner — wraps LLMBackend + build_prompt + message→prompt conversion
+  models.py         dataclasses (Skill, Person, Team, Task, ProjectPlan, CompanyState, RequirementsEvaluation, Message, Session, SessionRules) + build_prompt()
+  llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain, with setup() + think())
+  reasoner.py       LLMReasoner + ChatSessionReasoner + create_reasoner() factory
   backends/         provider implementations (anthropic, openai, fake, chat_session)
   communication.py  Session management, message routing, communication patterns (lead_delegates, pair_review)
-  registry.py       all YAML file I/O (skills, persons, teams, plans, outputs)
-  llm.py            stateless LLM calls via backend (CTO / HR / evaluation — NOT team execution)
+  llm.py            stateless LLM calls via backend (CTO / HR / evaluation — NOT team execution). Loads prompts from prompts/
+  prompts/          system prompt templates (cto_system.txt, eval_system.txt, autofix_system.txt, hr_system.txt)
+  workflow.py       multi-step business logic (evaluate_and_gate, plan_and_create_project) — extracted from CLI
+  seeds.py          default skills, persons, and teams for init — pure data, no I/O
+  registry.py       all YAML file I/O (skills, persons, teams, plans, outputs). Note: save_* functions auto-register new IDs in state.yaml
   orchestrator.py   execution loop + topological sort + session-based team coordination
   oversight.py      human checkpoint (Approve/Reject/Modify)
   validation.py     input validation (requirements, CTO plans, HR responses)
-  cli.py            Click commands (with interactive evaluation gate)
-tests/              pytest suite — 159 tests, all mocked
+  cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
+tests/              pytest suite — 190 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
@@ -97,8 +100,11 @@ projects/           runtime project data — gitignored
 - Always run tests before committing: `.venv/bin/pytest tests/ -q`
 - Python files only in `aicompany/` — no business logic in `main.py` or `tests/`
 - Models are pure data — no I/O or API calls in `models.py`
-- `registry.py` is the only module that reads/writes files
-- `llm.py` is the only module that calls LLM backends (via the `LLMBackend` protocol)
+- `registry.py` is the only module that reads/writes files (save_* auto-registers new IDs in state.yaml)
+- `llm.py` is the only module that calls LLM backends (via the `LLMBackend` protocol). Prompts live in `prompts/` as text files
+- `workflow.py` owns multi-step business logic (evaluation gate, CTO planning, HR team creation)
+- `seeds.py` owns default data definitions — pure data, no I/O
+- `cli.py` is a thin UI layer — delegates to `workflow.py` and `orchestrator.py`
 - No hardcoded provider imports outside `backends/`
 - No new dependencies without updating `requirements.txt` and `system-deps.txt`
 - When adding a new module, add corresponding tests in `tests/`
@@ -131,12 +137,15 @@ All tests are fully isolated — `conftest.py` redirects all config paths to `tm
 
 4. **Respect module boundaries.**
    - `models.py` — pure data only. No I/O, no API calls, no imports from other aicompany modules.
-   - `registry.py` — the ONLY module that reads/writes files.
-   - `llm.py` — the ONLY module that calls LLM backends. Never import a provider SDK here.
+   - `registry.py` — the ONLY module that reads/writes files. Note: save_* auto-registers in state.yaml.
+   - `llm.py` — the ONLY module that calls LLM backends. Never import a provider SDK here. Prompts live in `prompts/*.txt`.
    - `llm_backend.py` — protocol definition only. No business logic.
+   - `reasoner.py` — Reasoner implementations (LLMReasoner, ChatSessionReasoner). Uses LLMBackend, never concrete providers.
    - `backends/` — provider implementations. Each must call `register_backend()`.
+   - `workflow.py` — multi-step business logic. No UI/CLI code.
+   - `seeds.py` — default data definitions. Pure data, no I/O.
    - `validation.py` — pure validation logic. No I/O, no LLM calls.
-   - `cli.py` — user-facing commands. Orchestrates the above modules.
+   - `cli.py` — user-facing commands. Thin UI layer — delegates to workflow.py and orchestrator.py.
 
 5. **Write tests for every change.** No PR/commit without corresponding test updates.
    - New function → new test

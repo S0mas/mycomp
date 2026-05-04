@@ -126,7 +126,7 @@ class TestEvaluationGate:
     def test_good_requirements_proceed(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(GOOD_REQUIREMENTS)
-        with patch("aicompany.cli.llm") as m:
+        with patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_PASS
             m.cto_analyze.return_value = MOCK_CTO_RESPONSE
             m.hr_create_team.return_value = MOCK_TEAM_RESPONSE
@@ -137,7 +137,7 @@ class TestEvaluationGate:
     def test_mediocre_requirements_blocked(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(MEDIOCRE_REQUIREMENTS)
-        with patch("aicompany.cli.llm") as m:
+        with patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert result.exit_code == 1
@@ -149,7 +149,7 @@ class TestEvaluationGate:
     def test_terrible_requirements_blocked_with_reject(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(BAD_REQUIREMENTS)
-        with patch("aicompany.cli.llm") as m:
+        with patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_TERRIBLE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert result.exit_code == 1
@@ -161,7 +161,7 @@ class TestEvaluationGate:
         """Requirements too short — blocked before even calling the LLM."""
         runner.invoke(cli, ["init"])
         path = _write_requirements(TERRIBLE_REQUIREMENTS)
-        with patch("aicompany.cli.llm") as m:
+        with patch("aicompany.workflow.llm") as m:
             result = runner.invoke(cli, ["new-project", path])
         assert result.exit_code == 1
         assert "too short" in result.output
@@ -171,7 +171,7 @@ class TestEvaluationGate:
     def test_autofix_generates_improved_file(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(MEDIOCRE_REQUIREMENTS)
-        with patch("aicompany.cli.llm") as m:
+        with patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             m.autofix_requirements.return_value = GOOD_REQUIREMENTS
             result = runner.invoke(cli, ["new-project", path], input="y\n")
@@ -189,7 +189,7 @@ class TestEvaluationGate:
         """Blocked output includes actionable fix hints."""
         runner.invoke(cli, ["init"])
         path = _write_requirements(BAD_REQUIREMENTS)
-        with patch("aicompany.cli.llm") as m:
+        with patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert "acceptance criteria" in result.output.lower() or "Add missing sections" in result.output
