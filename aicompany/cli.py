@@ -5,7 +5,7 @@ import click
 import yaml
 
 from . import config, llm, orchestrator, registry
-from .models import CompanyState, Person, ProjectPlan, Task, Team
+from .models import CompanyState, Person, ProjectPlan, Skill, Task, Team
 
 
 def _print_ok(msg: str) -> None:
@@ -26,6 +26,11 @@ def _print_err(msg: str) -> None:
 
 # ── init ───────────────────────────────────────────────────────────────────────
 
+def _seed_skills(skills: list[Skill]) -> None:
+    for s in skills:
+        registry.save_skill(s)
+
+
 def _seed_team(persons: list[Person], team: Team) -> None:
     for p in persons:
         registry.save_person(p)
@@ -34,7 +39,7 @@ def _seed_team(persons: list[Person], team: Team) -> None:
 
 @click.command("init")
 def cmd_init():
-    """Bootstrap the company: create state.yaml and seed starter teams."""
+    """Bootstrap the company: create state.yaml and seed starter skills and teams."""
     if config.STATE_FILE.exists():
         _print_warn("Company already initialised. Delete company/state.yaml to reset.")
         return
@@ -42,49 +47,113 @@ def cmd_init():
     registry.save_state(CompanyState())
     _print_ok("Created company/state.yaml")
 
+    # ── Shared skills ─────────────────────────────────────────────────────────
+    skills = [
+        Skill(id="python", name="Python", category="language", knowledge=[
+            "Use type hints on all function signatures",
+            "Prefer pathlib over os.path for file operations",
+            "Use dataclasses or Pydantic for structured data",
+            "Follow PEP 8 naming conventions",
+        ]),
+        Skill(id="fastapi", name="FastAPI", category="framework", knowledge=[
+            "Use async def for route handlers",
+            "Use Pydantic models for request/response validation",
+            "Use Depends() for dependency injection",
+            "Always set response_model for automatic serialization",
+        ]),
+        Skill(id="sqlalchemy", name="SQLAlchemy", category="framework", knowledge=[
+            "Use SQLAlchemy 2.0 select() style, not legacy Query",
+            "Define models with mapped_column() for type safety",
+            "Use sessionmaker with context managers for transaction safety",
+        ]),
+        Skill(id="postgresql", name="PostgreSQL", category="tool", knowledge=[
+            "Use migrations (Alembic) for schema changes — never raw DDL in code",
+            "Add indexes on foreign keys and frequently filtered columns",
+        ]),
+        Skill(id="docker", name="Docker", category="tool", knowledge=[
+            "Use multi-stage builds to minimize image size",
+            "Never store secrets in image layers",
+            "Pin base image versions for reproducibility",
+        ]),
+        Skill(id="react", name="React", category="framework", knowledge=[
+            "Use functional components with hooks, not class components",
+            "Prefer controlled components for form inputs",
+            "Use React.memo() and useMemo() only when profiling shows a need",
+        ]),
+        Skill(id="typescript", name="TypeScript", category="language", knowledge=[
+            "Always define explicit types for function parameters and return values",
+            "Use interfaces for object shapes and type aliases for unions",
+            "Avoid 'any' — use 'unknown' and narrow with type guards",
+        ]),
+        Skill(id="nextjs", name="Next.js", category="framework", knowledge=[
+            "Use app router (app/) not pages router for new projects",
+            "Use server components by default, add 'use client' only when needed",
+            "Use next/image for automatic image optimization",
+        ]),
+        Skill(id="tailwind", name="Tailwind CSS", category="framework", knowledge=[
+            "Use utility classes directly — avoid @apply in most cases",
+            "Use the design system (spacing, colors) consistently",
+        ]),
+        Skill(id="rest_api", name="REST API Design", category="practice", knowledge=[
+            "Use proper HTTP methods: GET for reads, POST for creates, PUT/PATCH for updates",
+            "Return appropriate status codes: 201 for created, 404 for not found, 422 for validation errors",
+            "Version APIs in the URL path: /api/v1/",
+        ]),
+        Skill(id="html", name="HTML", category="language", knowledge=[
+            "Use semantic elements (header, main, nav, section) not just divs",
+            "Always include alt text on images",
+        ]),
+        Skill(id="css", name="CSS", category="language", knowledge=[
+            "Use flexbox and grid for layout, not floats",
+            "Use CSS custom properties (variables) for theming",
+        ]),
+    ]
+    _seed_skills(skills)
+    _print_ok(f"Created {len(skills)} shared skills")
+
     # ── Backend team ──────────────────────────────────────────────────────────
     backend_lead = Person(
         id="backend_lead",
         name="Backend Tech Lead",
         role="lead",
-        system_prompt=(
-            "You are a Backend Tech Lead at an AI software company. "
-            "You plan backend work, assign sub-tasks to your team, and synthesize their outputs.\n\n"
-            "Your team specialises in Python, FastAPI, SQLAlchemy, PostgreSQL, and Docker.\n\n"
-            "When writing a brief: be concise, name each member explicitly, and state exactly "
-            "what they should produce. When synthesizing: resolve conflicts, deduplicate, and "
-            "produce one coherent Markdown document with all file paths and code."
-        ),
+        identity="You are a Backend Tech Lead at an AI software company.",
+        skills=["python", "fastapi", "sqlalchemy", "postgresql", "docker", "rest_api"],
+        knowledge=[
+            "You plan backend work, assign sub-tasks to your team, and synthesize their outputs",
+            "Your team specialises in Python, FastAPI, SQLAlchemy, PostgreSQL, and Docker",
+        ],
+        rules=[
+            "When writing a brief: be concise, name each member explicitly, and state exactly what they should produce",
+            "When synthesizing: resolve conflicts, deduplicate, and produce one coherent Markdown document with all file paths and code",
+        ],
     )
     backend_coder = Person(
         id="backend_coder",
         name="Backend Engineer",
         role="coder",
-        system_prompt=(
-            "You are a senior Backend Engineer specialising in Python. "
-            "You write production-quality code using FastAPI, SQLAlchemy, and PostgreSQL.\n\n"
-            "For every task, produce:\n"
-            "1. Complete file paths with full code in fenced ```python blocks\n"
-            "2. Any required environment variables or config\n"
-            "3. One-line explanation of key design decisions\n\n"
-            "No placeholders. No TODOs. Complete, runnable code only."
-        ),
+        identity="You are a senior Backend Engineer specialising in Python.",
+        skills=["python", "fastapi", "sqlalchemy", "postgresql"],
+        knowledge=[],
+        rules=[
+            "For every task, produce complete file paths with full code in fenced ```python blocks",
+            "Include any required environment variables or config",
+            "Include one-line explanation of key design decisions",
+            "No placeholders. No TODOs. Complete, runnable code only",
+        ],
     )
     backend_reviewer = Person(
         id="backend_reviewer",
         name="Backend Code Reviewer",
         role="reviewer",
-        system_prompt=(
-            "You are a Backend Code Reviewer. Your job is to review code produced by your team "
-            "and flag issues before synthesis.\n\n"
-            "For each piece of code, check:\n"
-            "- Correctness (logic errors, edge cases)\n"
-            "- Security (SQL injection, hardcoded secrets, missing validation)\n"
-            "- Style (naming, function size, duplication)\n"
-            "- Test coverage gaps\n\n"
-            "Produce a Markdown review with: issues found (with file + line), "
-            "suggested fixes, and a final verdict (approve / request changes)."
-        ),
+        identity="You are a Backend Code Reviewer.",
+        skills=["python", "fastapi", "sqlalchemy"],
+        knowledge=[
+            "Your job is to review code produced by your team and flag issues before synthesis",
+        ],
+        rules=[
+            "For each piece of code, check: correctness (logic errors, edge cases), security (SQL injection, hardcoded secrets, missing validation), style (naming, function size, duplication), test coverage gaps",
+            "Produce a Markdown review with: issues found (with file + line), suggested fixes, and a final verdict (approve / request changes)",
+        ],
     )
     backend_team = Team(
         id="backend_team",
@@ -101,25 +170,30 @@ def cmd_init():
         id="frontend_lead",
         name="Frontend Tech Lead",
         role="lead",
-        system_prompt=(
-            "You are a Frontend Tech Lead. You plan UI work, assign sub-tasks, and synthesize outputs.\n\n"
-            "Your team uses React, TypeScript, Next.js, and Tailwind CSS.\n\n"
-            "When writing a brief: name each member, state what component/file they own. "
-            "When synthesizing: produce one coherent Markdown document with all components and styles."
-        ),
+        identity="You are a Frontend Tech Lead.",
+        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
+        knowledge=[
+            "You plan UI work, assign sub-tasks, and synthesize outputs",
+            "Your team uses React, TypeScript, Next.js, and Tailwind CSS",
+        ],
+        rules=[
+            "When writing a brief: name each member, state what component/file they own",
+            "When synthesizing: produce one coherent Markdown document with all components and styles",
+        ],
     )
     frontend_coder = Person(
         id="frontend_coder",
         name="Frontend Engineer",
         role="coder",
-        system_prompt=(
-            "You are a senior Frontend Engineer specialising in React and TypeScript.\n\n"
-            "For every task, produce:\n"
-            "1. Complete file paths with full code in fenced ```tsx or ```ts blocks\n"
-            "2. Prop types and component interfaces\n"
-            "3. Accessibility considerations\n\n"
-            "No placeholders. Complete, renderable components only."
-        ),
+        identity="You are a senior Frontend Engineer specialising in React and TypeScript.",
+        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
+        knowledge=[],
+        rules=[
+            "For every task, produce complete file paths with full code in fenced ```tsx or ```ts blocks",
+            "Include prop types and component interfaces",
+            "Include accessibility considerations",
+            "No placeholders. Complete, renderable components only",
+        ],
     )
     frontend_team = Team(
         id="frontend_team",
@@ -173,13 +247,16 @@ def cmd_new_project(requirements_file: str):
         tech_context = ", ".join(tech_stack)
         result = llm.hr_create_team(team_id, tech_context)
 
-        # HR now returns {"team": {...}, "persons": [...]}
+        # HR returns {"team": {...}, "persons": [...], "skills": [...]}
         team_data = result.get("team", result)
         persons_data = result.get("persons", [])
+        skills_data = result.get("skills", [])
 
         team_data["id"] = team_id
         team = Team.from_dict(team_data)
 
+        for sd in skills_data:
+            registry.save_skill(Skill.from_dict(sd))
         for pd in persons_data:
             registry.save_person(Person.from_dict(pd))
         registry.save_team(team)

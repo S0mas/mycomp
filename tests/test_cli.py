@@ -56,17 +56,24 @@ MOCK_TEAM_RESPONSE = {
             "id": "devops_lead",
             "name": "DevOps Lead",
             "role": "lead",
-            "system_prompt": "You are a DevOps lead.",
+            "identity": "You are a DevOps lead.",
+            "skills": ["docker", "kubernetes"],
+            "knowledge": [],
+            "rules": ["Coordinate deployments"],
             "tools": [],
         },
         {
             "id": "devops_coder",
             "name": "DevOps Engineer",
             "role": "coder",
-            "system_prompt": "You are a DevOps engineer.",
+            "identity": "You are a DevOps engineer.",
+            "skills": ["docker", "kubernetes", "terraform"],
+            "knowledge": [],
+            "rules": ["Write infrastructure as code"],
             "tools": [],
         },
     ],
+    "skills": [],
 }
 
 

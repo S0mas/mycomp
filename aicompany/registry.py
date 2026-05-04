@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 from . import config
-from .models import CompanyState, Person, ProjectPlan, Task, Team
+from .models import CompanyState, Person, ProjectPlan, Skill, Task, Team
 
 
 # ── Company state ──────────────────────────────────────────────────────────────
@@ -51,6 +51,30 @@ def save_person(person: Person) -> None:
         save_state(state)
 
 
+# ── Skills ─────────────────────────────────────────────────────────────────────
+
+def load_skill(skill_id: str) -> Skill:
+    path = config.SKILLS_DIR / f"{skill_id}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Skill file not found: {path}")
+    with path.open() as f:
+        return Skill.from_dict(yaml.safe_load(f))
+
+
+def save_skill(skill: Skill) -> None:
+    config.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.SKILLS_DIR / f"{skill.id}.yaml"
+    with path.open("w") as f:
+        yaml.dump(skill.to_dict(), f, default_flow_style=False, allow_unicode=True)
+
+    # Keep state.yaml in sync
+    state = load_state()
+    skill_entry = {"id": skill.id, "name": skill.name, "category": skill.category}
+    if skill.id not in state.skill_ids():
+        state.skills.append(skill_entry)
+        save_state(state)
+
+
 # ── Teams ──────────────────────────────────────────────────────────────────────
 
 def load_team(team_id: str) -> Team:
@@ -61,12 +85,25 @@ def load_team(team_id: str) -> Team:
         return Team.from_dict(yaml.safe_load(f))
 
 
-def load_team_with_members(team_id: str) -> tuple[Team, Person, list[Person]]:
-    """Return (team, lead_person, [all_member_persons])."""
+def load_team_with_members(team_id: str) -> tuple[Team, Person, list[Person], dict]:
+    """Return (team, lead_person, [all_member_persons], {skill_id: Skill})."""
     team = load_team(team_id)
     members = [load_person(pid) for pid in team.members]
     lead = next((p for p in members if p.id == team.lead_id), members[0])
-    return team, lead, members
+
+    # Collect all unique skill IDs referenced by team members
+    skill_ids = set()
+    for p in members:
+        skill_ids.update(p.skills)
+
+    skill_registry = {}
+    for sid in skill_ids:
+        try:
+            skill_registry[sid] = load_skill(sid)
+        except FileNotFoundError:
+            pass  # skill file missing — skip gracefully
+
+    return team, lead, members, skill_registry
 
 
 def save_team(team: Team) -> None:

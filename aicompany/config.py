@@ -6,6 +6,7 @@ BASE_DIR = Path(__file__).parent.parent
 COMPANY_DIR = BASE_DIR / "company"
 STATE_FILE = COMPANY_DIR / "state.yaml"
 TEAMS_DIR = COMPANY_DIR / "teams"
+SKILLS_DIR = COMPANY_DIR / "skills"
 PROJECTS_DIR = BASE_DIR / "projects"
 
 MODEL = os.environ.get("AICOMPANY_MODEL", "claude-sonnet-4-6")

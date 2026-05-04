@@ -14,7 +14,7 @@ mycomp/
 ├── aicompany/                     # Core package — all business logic lives here
 │   ├── __init__.py
 │   ├── config.py                  # Paths, env vars, model constant
-│   ├── models.py                  # Dataclasses: Person, Team, Task, ProjectPlan, CompanyState
+│   ├── models.py                  # Dataclasses: Skill, Person, Team, Task, ProjectPlan, CompanyState + build_prompt
 │   ├── registry.py                # All file I/O — reads and writes YAML/Markdown
 │   ├── llm.py                     # All Claude API calls — CTO, HR, team agents
 │   ├── orchestrator.py            # Project execution loop
@@ -22,7 +22,11 @@ mycomp/
 │   └── cli.py                     # Click commands: init, new-project, run, status
 │
 ├── company/                       # Runtime — gitignored, created by `init`
-│   ├── state.yaml                 # Company registry (all teams + persons + technologies seen)
+│   ├── state.yaml                 # Company registry (all teams + persons + skills + technologies seen)
+│   ├── skills/
+│   │   ├── python.yaml            # Seeded by init — shared knowledge
+│   │   ├── fastapi.yaml           # Seeded by init
+│   │   └── *.yaml                 # Created by HR agent on demand
 │   ├── teams/
 │   │   ├── backend_team.yaml      # Seeded by init
 │   │   ├── frontend_team.yaml     # Seeded by init
@@ -61,17 +65,37 @@ mycomp/
 
 All models live in `aicompany/models.py`. They are plain Python dataclasses with `from_dict` / `to_dict` methods for YAML serialisation.
 
+### `Skill`
+A shared knowledge unit — reusable across persons. Stored in `company/skills/*.yaml`.
+
+```
+id              str       snake_case identifier (e.g. python, fastapi)
+name            str       Human-readable label
+category        str       "language" | "framework" | "tool" | "practice" | ""
+knowledge       list[str] Technical facts anyone with this skill should know
+created_at      str       ISO 8601 UTC timestamp
+```
+
 ### `Person`
-An individual AI agent within a team. Each person has a distinct role and system prompt.
+An individual AI agent within a team. Each person has structured context — not a monolithic prompt.
 
 ```
 id              str       snake_case identifier (e.g. backend_lead, backend_coder)
 name            str       Human-readable label
 role            str       "lead" | "coder" | "reviewer" | "architect" | "specialist"
-system_prompt   str       Full system prompt fed to Claude when this person executes work
+identity        str       Short, stable — "You are a senior Backend Engineer."
+skills          list[str] Skill IDs — references into the shared skill registry
+knowledge       list[str] Person-specific knowledge (accumulated over time)
+rules           list[str] Behavioural rules — how they work and communicate
 tools           list      Reserved for future tool definitions
 created_at      str       ISO 8601 UTC timestamp
 ```
+
+At execution time, `build_prompt(person, skill_registry)` composes the system prompt by:
+1. Starting with the person's `identity`
+2. Collecting `knowledge` from all referenced skills
+3. Adding the person's own `knowledge`
+4. Adding the person's `rules`
 
 ### `Team`
 A group of persons who collaborate on tasks. One member is the lead — they coordinate the others.
@@ -93,6 +117,7 @@ version             str       Schema version
 created_at          str       ISO 8601 UTC timestamp
 teams               list      Slim team entries: {id, name, skills} — full configs in teams/*.yaml
 persons             list      Slim person entries: {id, name, role} — full configs in persons/*.yaml
+skills              list      Slim skill entries: {id, name, category} — full configs in skills/*.yaml
 technologies_seen   list[str] Accumulated across all projects
 ```
 
@@ -143,17 +168,21 @@ Pure data — no I/O, no API calls. All dataclasses have two class/instance meth
 - `from_dict(d)` — construct from a raw dict (as loaded by `yaml.safe_load`)
 - `to_dict()` — convert to a plain dict (ready for `yaml.dump`)
 
+Module-level function:
+- `build_prompt(person, skill_registry)` — composes a system prompt from structured context
+
 Helper properties worth knowing:
 - `Team.skill_set` — lowercase set of skills, used for case-insensitive matching
 - `CompanyState.all_skills()` — union of all team skill sets
 - `CompanyState.team_ids()` — list of all registered team IDs
 - `CompanyState.person_ids()` — list of all registered person IDs
+- `CompanyState.skill_ids()` — list of all registered skill IDs
 - `ProjectPlan.task_by_id(id)` — lookup a task by ID, returns `None` if not found
 
 ### `registry.py`
 All YAML and Markdown file I/O. No logic beyond reading and writing — deliberately thin. Every function has a single responsibility.
 
-Company functions: `load_state`, `save_state`, `load_team`, `save_team`, `load_person`, `save_person`, `load_team_with_members`, `find_missing_skills`, `find_team_for_skill`
+Company functions: `load_state`, `save_state`, `load_team`, `save_team`, `load_person`, `save_person`, `load_skill`, `save_skill`, `load_team_with_members`, `find_missing_skills`, `find_team_for_skill`
 
 Project functions: `create_project_dir`, `load_plan`, `save_plan`, `save_output`, `load_output`, `save_decision`, `list_projects`
 
@@ -165,7 +194,7 @@ The only module that talks to Claude. Public functions and one private helper:
 | Function | Role | Output |
 |---|---|---|
 | `cto_analyze(requirements, state_yaml)` | CTO | Plan dict |
-| `hr_create_team(skill_name, tech_context)` | HR / Team Builder | Dict with `team` and `persons` keys |
+| `hr_create_team(skill_name, tech_context)` | HR / Team Builder | Dict with `team`, `persons`, and `skills` keys |
 | `team_brief(lead_prompt, title, description, context, members)` | Team lead | Markdown brief assigning sub-tasks to each member |
 | `person_execute(person_prompt, person_name, brief, title)` | Team member | Markdown output for their sub-task |
 | `team_synthesize(lead_prompt, title, contributions)` | Team lead | Final unified Markdown output |
@@ -213,7 +242,7 @@ Click command group. Thin wiring layer — no business logic. Each command does:
 
 | Command | What it does |
 |---|---|
-| `init` | Creates `company/state.yaml`, seeds `backend_team` (lead + coder + reviewer) and `frontend_team` (lead + coder) with their persons |
+| `init` | Creates `company/state.yaml`, seeds 12 shared skills, `backend_team` (lead + coder + reviewer) and `frontend_team` (lead + coder) with their persons |
 | `new-project <file>` | Reads requirements → CTO analysis → HR for missing teams → saves project plan |
 | `run <project-id>` | Delegates to `orchestrator.run_project()` |
 | `run --dry-run <id>` | Same but with `dry_run=True` — no LLM calls, no checkpoints |
@@ -236,8 +265,10 @@ User
   │
   ├─► registry.find_missing_skills()
   │
-  ├─► llm.hr_create_team()       → team + persons dicts (for each missing skill)
+  ├─► llm.hr_create_team()       → team + persons + skills dicts (for each missing skill)
   │       Claude (HR role)
+  │
+  ├─► registry.save_skill()       → company/skills/{id}.yaml (for each new skill)
   │
   ├─► registry.save_person()     → company/persons/{id}.yaml (for each person)
   │                                 company/state.yaml (synced)
@@ -261,7 +292,10 @@ User
               │       → projects/{id}/decisions/{ts}_{task_id}.md
               │
               ├── registry.load_team_with_members()
-              │       → (team, lead_person, [member_persons])
+              │       → (team, lead_person, [member_persons], {skill_id: Skill})
+              │
+              ├── build_prompt(person, skill_registry)
+              │       → composed system prompt from identity + skills + knowledge + rules
               │
               ├── llm.team_brief()
               │       Claude (lead's system_prompt) → work brief

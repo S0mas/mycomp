@@ -2,7 +2,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from . import llm, oversight, registry
-from .models import ProjectPlan, Task
+from .models import ProjectPlan, Task, build_prompt
 
 
 class OrchestratorError(Exception):
@@ -132,13 +132,14 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
         registry.save_plan(plan)
 
         try:
-            team, lead, members = registry.load_team_with_members(task.assigned_team)
+            team, lead, members, skill_registry = registry.load_team_with_members(task.assigned_team)
             context = _build_project_context(plan, completed_ids)
 
             # Step 1: lead produces a work brief for the team
             member_dicts = [{"id": p.id, "name": p.name, "role": p.role} for p in members]
+            lead_prompt = build_prompt(lead, skill_registry)
             print(f"    → {lead.name} (lead) writing brief...")
-            brief = llm.team_brief(lead.system_prompt, task.title,
+            brief = llm.team_brief(lead_prompt, task.title,
                                    task.description, context, member_dicts)
 
             # Step 2: each non-lead member executes their part
@@ -146,15 +147,16 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             for person in members:
                 if person.id == lead.id:
                     continue
+                person_prompt = build_prompt(person, skill_registry)
                 print(f"    → {person.name} ({person.role}) executing...")
-                output = llm.person_execute(person.system_prompt, person.name,
+                output = llm.person_execute(person_prompt, person.name,
                                             brief, task.title)
                 contributions.append({"name": person.name, "output": output})
 
             # Step 3: lead synthesizes into the final deliverable
             if contributions:
                 print(f"    → {lead.name} (lead) synthesizing...")
-                output = llm.team_synthesize(lead.system_prompt, task.title,
+                output = llm.team_synthesize(lead_prompt, task.title,
                                              contributions)
             else:
                 # Single-person team: lead is sole contributor, brief IS the output

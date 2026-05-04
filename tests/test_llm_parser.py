@@ -38,9 +38,9 @@ VALID_TEAM = {
     "id": "devops_engineer",
     "name": "DevOps Engineer",
     "skills": ["docker", "kubernetes"],
-    "system_prompt": "You are a senior DevOps engineer.",
-    "tools": [],
-    "context_notes": "",
+    "identity": "You are a senior DevOps engineer.",
+    "knowledge": [],
+    "rules": ["Write infrastructure as code"],
 }
 
 

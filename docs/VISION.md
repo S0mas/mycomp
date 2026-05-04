@@ -44,19 +44,35 @@ The long-term goal is to automate or augment every phase of the software develop
 
 ---
 
-## What "Teams" and "Persons" Mean
+## What "Skills", "Persons", and "Teams" Mean
 
-A **person** is an individual AI agent with:
-- A **role** (lead, coder, reviewer, architect, or specialist)
-- A **system prompt** that defines how it thinks, what it produces, and how it formats output
-- An optional **tool list** for future integrations (web search, code execution, file access)
+A **skill** is a shared knowledge unit — a reusable body of technical knowledge:
+- A **name** and **category** (language, framework, tool, practice)
+- A **knowledge** list — facts that anyone with this skill should know
+- Skills are shared: when the system learns something about Python, every person who references the `python` skill gets smarter
+
+A **person** is an individual AI agent with structured context:
+- An **identity** — short, stable description ("You are a senior Backend Engineer")
+- **Skill references** — IDs pointing to shared skills in the registry
+- **Knowledge** — person-specific experience accumulated over time
+- **Rules** — behavioural constraints defining how they work and communicate
+- An optional **tool list** for future integrations
 
 A **team** is a group of persons who collaborate on a task:
 - A **skill set** that determines which tasks the team is assigned
-- A **lead** who coordinates the work — they write a brief, assign sub-tasks, and synthesize the final output
-- **Members** (coders, reviewers, etc.) who each execute their part based on the lead's brief
+- A **lead** who coordinates — writes briefs, assigns sub-tasks, synthesizes output
+- **Members** (coders, reviewers, etc.) who each execute their part
 
-Teams are created on demand. When the CTO's plan requires a skill the company doesn't have, the HR agent designs a new team with the right persons. That team and its persons are saved to the company registry and reused in future projects.
+At execution time, each person's system prompt is **composed** from their structured context:
+```
+identity → skill knowledge (from all referenced skills) → personal knowledge → rules
+```
+
+This separation enables learning at the right level:
+- Technical insight about FastAPI → goes into `skills/fastapi.yaml` → benefits everyone
+- A specific person keeps missing tests → goes into their `rules` → fixes just them
+
+Teams are created on demand. When the CTO's plan requires a skill the company doesn't have, the HR agent designs a new team with the right persons and skills. Everything is saved to the registry and reused in future projects.
 
 Task execution follows a three-step flow:
 1. The **lead** analyses the task and writes a brief assigning sub-tasks to each member

@@ -10,6 +10,7 @@ you → requirements.md → [CTO plans] → [HR builds teams] → [agents execut
 
 → [Vision and roadmap](docs/VISION.md)
 → [Architecture and module reference](docs/ARCHITECTURE.md)
+→ [Self-improvement — how the company learns](docs/SELF_IMPROVEMENT.md)
 
 ---
 
@@ -41,7 +42,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 python main.py init
 ```
 
-Creates `company/state.yaml` and seeds two starter teams: `backend_team` (lead + coder + reviewer) and `frontend_team` (lead + coder). Each team is composed of individual AI persons with specialised roles and system prompts.
+Creates `company/state.yaml` and seeds 12 shared skills, two starter teams (`backend_team` and `frontend_team`), and their persons. Each person has structured context — identity, skill references, knowledge, and rules — instead of a monolithic system prompt.
 
 ### 4. Start a project
 
@@ -130,7 +131,7 @@ No API key needed — all LLM calls are mocked.
 .venv/bin/pytest tests/ -v
 ```
 
-83 tests covering models, registry, LLM JSON parsing, orchestrator logic, and CLI commands.
+100 tests covering models, skills, prompt composition, registry, LLM JSON parsing, orchestrator logic, and CLI commands.
 
 ---
 

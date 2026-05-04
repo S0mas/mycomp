@@ -8,11 +8,37 @@ def _now() -> str:
 
 
 @dataclass
+class Skill:
+    """Shared knowledge unit — reusable across persons."""
+    id: str
+    name: str
+    category: str = ""          # "language" | "framework" | "tool" | "practice" | ""
+    knowledge: list = field(default_factory=list)   # things an agent with this skill should know
+    created_at: str = field(default_factory=_now)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Skill":
+        return cls(
+            id=d["id"],
+            name=d["name"],
+            category=d.get("category", ""),
+            knowledge=d.get("knowledge", []),
+            created_at=d.get("created_at", _now()),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class Person:
     id: str
     name: str
-    role: str        # "lead" | "coder" | "reviewer" | "architect" | "specialist"
-    system_prompt: str
+    role: str               # "lead" | "coder" | "reviewer" | "architect" | "specialist"
+    identity: str           # short, stable — "You are a senior Backend Engineer."
+    skills: list = field(default_factory=list)       # skill IDs — references into the skill registry
+    knowledge: list = field(default_factory=list)     # person-specific knowledge (learned over time)
+    rules: list = field(default_factory=list)          # behavioural rules — how they work and communicate
     tools: list = field(default_factory=list)
     created_at: str = field(default_factory=_now)
 
@@ -22,7 +48,10 @@ class Person:
             id=d["id"],
             name=d["name"],
             role=d.get("role", "specialist"),
-            system_prompt=d.get("system_prompt", ""),
+            identity=d.get("identity", ""),
+            skills=d.get("skills", []),
+            knowledge=d.get("knowledge", []),
+            rules=d.get("rules", []),
             tools=d.get("tools", []),
             created_at=d.get("created_at", _now()),
         )
@@ -59,12 +88,42 @@ class Team:
         return {s.lower() for s in self.skills}
 
 
+def build_prompt(person: Person, skill_registry: dict | None = None) -> str:
+    """Compose a system prompt from a person's structured context and their skills."""
+    sections = [person.identity] if person.identity else []
+
+    # Collect knowledge from referenced skills
+    skill_knowledge = []
+    if skill_registry:
+        for skill_id in person.skills:
+            skill = skill_registry.get(skill_id)
+            if skill and skill.knowledge:
+                skill_knowledge.extend(skill.knowledge)
+
+    if skill_knowledge:
+        lines = "\n".join(f"- {k}" for k in skill_knowledge)
+        sections.append(f"Technical knowledge:\n{lines}")
+
+    # Person-specific knowledge
+    if person.knowledge:
+        lines = "\n".join(f"- {k}" for k in person.knowledge)
+        sections.append(f"Your experience:\n{lines}")
+
+    # Behavioural rules
+    if person.rules:
+        lines = "\n".join(f"- {r}" for r in person.rules)
+        sections.append(f"Rules you follow:\n{lines}")
+
+    return "\n\n".join(sections)
+
+
 @dataclass
 class CompanyState:
     version: str = "1"
     created_at: str = field(default_factory=_now)
     teams: list = field(default_factory=list)
     persons: list = field(default_factory=list)
+    skills: list = field(default_factory=list)
     technologies_seen: list = field(default_factory=list)
 
     @classmethod
@@ -74,6 +133,7 @@ class CompanyState:
             created_at=d.get("created_at", _now()),
             teams=d.get("teams", []),
             persons=d.get("persons", []),
+            skills=d.get("skills", []),
             technologies_seen=d.get("technologies_seen", []),
         )
 
@@ -85,6 +145,9 @@ class CompanyState:
 
     def person_ids(self) -> list:
         return [p["id"] for p in self.persons]
+
+    def skill_ids(self) -> list:
+        return [s["id"] for s in self.skills]
 
     def all_skills(self) -> set:
         skills = set()

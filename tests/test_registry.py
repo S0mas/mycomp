@@ -18,8 +18,8 @@ import yaml
 
 import aicompany.config as config
 from aicompany import registry
-from aicompany.models import CompanyState, ProjectPlan, Task, Team
-from tests.conftest import write_state, write_team, write_plan
+from aicompany.models import CompanyState, ProjectPlan, Skill, Task, Team
+from tests.conftest import write_state, write_team, write_plan, write_skills
 
 
 # ── state ──────────────────────────────────────────────────────────────────────
@@ -83,6 +83,36 @@ class TestLoadSaveTeam:
         state = registry.load_state()
         ids = [t["id"] for t in state.teams]
         assert ids.count("backend_engineer") == 1
+
+
+# ── skills ─────────────────────────────────────────────────────────────────────
+
+class TestLoadSaveSkill:
+    def test_load_raises_if_missing(self):
+        with pytest.raises(FileNotFoundError):
+            registry.load_skill("nonexistent")
+
+    def test_round_trip(self, sample_skills):
+        registry.save_state(CompanyState())
+        skill = sample_skills[0]
+        registry.save_skill(skill)
+        loaded = registry.load_skill(skill.id)
+        assert loaded.id == skill.id
+        assert loaded.name == skill.name
+        assert loaded.knowledge == skill.knowledge
+
+    def test_save_skill_syncs_state(self, sample_skills):
+        registry.save_state(CompanyState())
+        registry.save_skill(sample_skills[0])
+        state = registry.load_state()
+        assert "python" in state.skill_ids()
+
+    def test_save_skill_does_not_duplicate(self, sample_skills):
+        registry.save_state(CompanyState())
+        registry.save_skill(sample_skills[0])
+        registry.save_skill(sample_skills[0])
+        state = registry.load_state()
+        assert state.skill_ids().count("python") == 1
 
 
 class TestFindSkills:

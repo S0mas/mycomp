@@ -21,7 +21,7 @@ import aicompany.config as config
 from aicompany import orchestrator, registry
 from aicompany.models import Task, Person, ProjectPlan, Team
 from aicompany.orchestrator import OrchestratorError, _topological_sort
-from tests.conftest import write_plan, write_state, write_team, write_persons
+from tests.conftest import write_plan, write_state, write_team, write_persons, write_skills
 
 
 # ── topological sort ───────────────────────────────────────────────────────────
@@ -73,18 +73,20 @@ class TestTopologicalSort:
 
 # ── run_project ────────────────────────────────────────────────────────────────
 
-def _setup(sample_state, sample_team, sample_plan, sample_persons=None):
+def _setup(sample_state, sample_team, sample_plan, sample_persons=None, sample_skills=None):
     """Write all fixtures to the isolated filesystem."""
     write_state(sample_state)
     write_team(sample_team)
     write_plan(sample_plan)
     if sample_persons:
         write_persons(sample_persons)
+    if sample_skills:
+        write_skills(sample_skills)
 
 
 class TestRunProjectDryRun:
-    def test_dry_run_prints_tasks(self, sample_state, sample_team, sample_plan, sample_persons, capsys):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_dry_run_prints_tasks(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills, capsys):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         orchestrator.run_project(sample_plan.project_id, dry_run=True)
         out = capsys.readouterr().out
         assert "task_001" in out
@@ -92,14 +94,14 @@ class TestRunProjectDryRun:
         assert "task_003" in out
         assert "dry-run" in out
 
-    def test_dry_run_does_not_call_llm(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_dry_run_does_not_call_llm(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         with patch("aicompany.orchestrator.llm") as mock_llm:
             orchestrator.run_project(sample_plan.project_id, dry_run=True)
             mock_llm.team_brief.assert_not_called()
 
-    def test_dry_run_does_not_call_oversight(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_dry_run_does_not_call_oversight(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         with patch("aicompany.orchestrator.oversight") as mock_oversight:
             orchestrator.run_project(sample_plan.project_id, dry_run=True)
             mock_oversight.checkpoint.assert_not_called()
@@ -117,34 +119,34 @@ class TestRunProjectExecution:
             orchestrator.run_project(project_id)
             return mock_llm, mock_oversight
 
-    def test_all_tasks_marked_done(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_all_tasks_marked_done(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         self._run_with_mocks(sample_plan.project_id)
         plan = registry.load_plan(sample_plan.project_id)
         assert all(t.status == "done" for t in plan.tasks)
 
-    def test_plan_marked_complete(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_plan_marked_complete(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         self._run_with_mocks(sample_plan.project_id)
         plan = registry.load_plan(sample_plan.project_id)
         assert plan.status == "complete"
 
-    def test_llm_called_once_per_task(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_llm_called_once_per_task(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         mock_llm, _ = self._run_with_mocks(sample_plan.project_id)
         # team_brief called once per task (3 tasks)
         assert mock_llm.team_brief.call_count == 3
 
-    def test_checkpoint_task_calls_oversight(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_checkpoint_task_calls_oversight(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         # task_002 is the checkpoint
         _, mock_oversight = self._run_with_mocks(sample_plan.project_id)
         mock_oversight.checkpoint.assert_called_once()
         args = mock_oversight.checkpoint.call_args[0]
         assert args[0].id == "task_002"
 
-    def test_rejected_task_skipped(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_rejected_task_skipped(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         mock_llm, _ = self._run_with_mocks(
             sample_plan.project_id, oversight_action="rejected"
         )
@@ -156,20 +158,21 @@ class TestRunProjectExecution:
         # team_brief only called for task_001 (before the checkpoint)
         assert mock_llm.team_brief.call_count == 1
 
-    def test_output_files_created(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_output_files_created(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         self._run_with_mocks(sample_plan.project_id)
         output = registry.load_output(sample_plan.project_id, "task_001")
         assert output is not None
         assert "Task output" in output
 
-    def test_already_done_tasks_skipped(self, sample_state, sample_team, sample_plan, sample_persons):
+    def test_already_done_tasks_skipped(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
         """Mark task_001 done before running — LLM should only be called for 002 and 003."""
         sample_plan.tasks[0].status = "done"
         write_plan(sample_plan)
         write_state(sample_state)
         write_team(sample_team)
         write_persons(sample_persons)
+        write_skills(sample_skills)
 
         with patch("aicompany.orchestrator.llm") as mock_llm, \
              patch("aicompany.orchestrator.oversight") as mock_oversight:
@@ -181,16 +184,16 @@ class TestRunProjectExecution:
 
         assert mock_llm.team_brief.call_count == 2
 
-    def test_already_complete_project_exits_early(self, sample_state, sample_team, sample_plan, sample_persons, capsys):
+    def test_already_complete_project_exits_early(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills, capsys):
         sample_plan.status = "complete"
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         with patch("aicompany.orchestrator.llm") as mock_llm:
             orchestrator.run_project(sample_plan.project_id)
             mock_llm.team_brief.assert_not_called()
         assert "already complete" in capsys.readouterr().out
 
-    def test_llm_error_marks_task_failed(self, sample_state, sample_team, sample_plan, sample_persons):
-        _setup(sample_state, sample_team, sample_plan, sample_persons)
+    def test_llm_error_marks_task_failed(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         with patch("aicompany.orchestrator.llm") as mock_llm, \
              patch("aicompany.orchestrator.oversight") as mock_oversight:
             mock_llm.team_brief.side_effect = Exception("API timeout")

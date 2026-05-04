@@ -6,9 +6,108 @@ What we verify:
   - to_dict() / from_dict() round-trips produce equal objects
   - Helper properties (skill_set, all_skills, task_by_id) work correctly
   - Default values are sane (status='pending', tools=[], etc.)
+  - build_prompt() composes structured context correctly
 """
 import pytest
-from aicompany.models import CompanyState, ProjectPlan, Task, Team
+from aicompany.models import CompanyState, Person, ProjectPlan, Skill, Task, Team, build_prompt
+
+
+class TestSkill:
+    def test_round_trip(self):
+        s = Skill(id="python", name="Python", category="language",
+                  knowledge=["Use type hints"])
+        restored = Skill.from_dict(s.to_dict())
+        assert restored.id == s.id
+        assert restored.knowledge == s.knowledge
+        assert restored.category == s.category
+
+    def test_defaults(self):
+        s = Skill(id="x", name="X")
+        assert s.category == ""
+        assert s.knowledge == []
+        assert s.created_at
+
+    def test_from_dict_tolerates_missing_optional(self):
+        s = Skill.from_dict({"id": "y", "name": "Y"})
+        assert s.knowledge == []
+        assert s.category == ""
+
+
+class TestPerson:
+    def test_round_trip(self, sample_persons):
+        for person in sample_persons:
+            restored = Person.from_dict(person.to_dict())
+            assert restored.id == person.id
+            assert restored.identity == person.identity
+            assert restored.skills == person.skills
+            assert restored.knowledge == person.knowledge
+            assert restored.rules == person.rules
+
+    def test_defaults(self):
+        p = Person(id="x", name="X", role="coder", identity="You are X.")
+        assert p.skills == []
+        assert p.knowledge == []
+        assert p.rules == []
+        assert p.tools == []
+        assert p.created_at
+
+    def test_from_dict_tolerates_missing_optional(self):
+        p = Person.from_dict({"id": "y", "name": "Y", "role": "coder", "identity": "You are Y."})
+        assert p.skills == []
+        assert p.knowledge == []
+        assert p.rules == []
+
+
+class TestBuildPrompt:
+    def test_identity_only(self):
+        p = Person(id="x", name="X", role="coder", identity="You are X.")
+        prompt = build_prompt(p)
+        assert "You are X." in prompt
+
+    def test_includes_skill_knowledge(self):
+        p = Person(id="x", name="X", role="coder", identity="You are X.",
+                   skills=["python"])
+        skills = {"python": Skill(id="python", name="Python",
+                                  knowledge=["Use type hints"])}
+        prompt = build_prompt(p, skills)
+        assert "Use type hints" in prompt
+        assert "Technical knowledge:" in prompt
+
+    def test_includes_person_knowledge(self):
+        p = Person(id="x", name="X", role="coder", identity="You are X.",
+                   knowledge=["I know databases"])
+        prompt = build_prompt(p)
+        assert "I know databases" in prompt
+        assert "Your experience:" in prompt
+
+    def test_includes_rules(self):
+        p = Person(id="x", name="X", role="coder", identity="You are X.",
+                   rules=["Write complete code"])
+        prompt = build_prompt(p)
+        assert "Write complete code" in prompt
+        assert "Rules you follow:" in prompt
+
+    def test_full_prompt_composition(self, sample_persons, sample_skills):
+        person = sample_persons[0]  # be_lead with skills, knowledge, rules
+        skill_registry = {s.id: s for s in sample_skills}
+        prompt = build_prompt(person, skill_registry)
+        assert "You are a backend lead." in prompt
+        assert "Use type hints" in prompt              # from python skill
+        assert "Use async def" in prompt               # from fastapi skill
+        assert "You coordinate the backend team" in prompt  # person knowledge
+        assert "Be concise in briefs" in prompt        # person rule
+
+    def test_missing_skill_gracefully_skipped(self):
+        p = Person(id="x", name="X", role="coder", identity="You are X.",
+                   skills=["nonexistent"])
+        prompt = build_prompt(p, {})  # skill not in registry
+        assert "You are X." in prompt
+        assert "Technical knowledge:" not in prompt
+
+    def test_empty_person(self):
+        p = Person(id="x", name="X", role="coder", identity="")
+        prompt = build_prompt(p)
+        assert prompt == ""
 
 
 class TestTeam:

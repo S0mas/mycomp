@@ -9,7 +9,7 @@ import yaml
 from pathlib import Path
 
 import aicompany.config as config
-from aicompany.models import CompanyState, Person, ProjectPlan, Task, Team
+from aicompany.models import CompanyState, Person, ProjectPlan, Skill, Task, Team
 
 
 # ── Filesystem isolation ───────────────────────────────────────────────────────
@@ -22,16 +22,19 @@ def isolated_fs(tmp_path, monkeypatch):
     """
     company_dir = tmp_path / "company"
     teams_dir = company_dir / "teams"
+    skills_dir = company_dir / "skills"
     projects_dir = tmp_path / "projects"
 
     company_dir.mkdir()
     teams_dir.mkdir()
+    skills_dir.mkdir()
     projects_dir.mkdir()
 
     monkeypatch.setattr(config, "BASE_DIR", tmp_path)
     monkeypatch.setattr(config, "COMPANY_DIR", company_dir)
     monkeypatch.setattr(config, "STATE_FILE", company_dir / "state.yaml")
     monkeypatch.setattr(config, "TEAMS_DIR", teams_dir)
+    monkeypatch.setattr(config, "SKILLS_DIR", skills_dir)
     monkeypatch.setattr(config, "PROJECTS_DIR", projects_dir)
 
     return tmp_path
@@ -40,12 +43,28 @@ def isolated_fs(tmp_path, monkeypatch):
 # ── Reusable model factories ───────────────────────────────────────────────────
 
 @pytest.fixture
+def sample_skills() -> list:
+    return [
+        Skill(id="python", name="Python", category="language",
+              knowledge=["Use type hints on all function signatures"]),
+        Skill(id="fastapi", name="FastAPI", category="framework",
+              knowledge=["Use async def for route handlers"]),
+    ]
+
+
+@pytest.fixture
 def sample_persons() -> list:
     return [
         Person(id="be_lead", name="Backend Lead", role="lead",
-               system_prompt="You are a backend lead."),
+               identity="You are a backend lead.",
+               skills=["python", "fastapi"],
+               knowledge=["You coordinate the backend team"],
+               rules=["Be concise in briefs"]),
         Person(id="be_coder", name="Backend Coder", role="coder",
-               system_prompt="You are a backend coder."),
+               identity="You are a backend coder.",
+               skills=["python", "fastapi"],
+               knowledge=[],
+               rules=["Write complete, runnable code"]),
     ]
 
 
@@ -133,6 +152,16 @@ def write_persons(persons: list) -> None:
         path = persons_dir / f"{p.id}.yaml"
         with path.open("w") as f:
             yaml.dump(p.to_dict(), f, default_flow_style=False)
+
+
+def write_skills(skills: list) -> None:
+    """Write Skill objects to the (patched) company/skills/ dir."""
+    skills_dir = config.SKILLS_DIR
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for s in skills:
+        path = skills_dir / f"{s.id}.yaml"
+        with path.open("w") as f:
+            yaml.dump(s.to_dict(), f, default_flow_style=False)
 
 
 def write_plan(plan: ProjectPlan) -> None:
