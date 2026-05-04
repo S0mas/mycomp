@@ -207,7 +207,7 @@ def cmd_init():
     _print_ok("Created frontend_team (lead + coder)")
 
     click.echo()
-    _print_ok("Company ready. Set ANTHROPIC_API_KEY and run:")
+    _print_ok("Company ready. Configure your LLM backend and run:")
     click.echo("    python main.py new-project <requirements.md>")
 
 

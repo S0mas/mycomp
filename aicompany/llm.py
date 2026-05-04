@@ -1,29 +1,23 @@
 import json
 import re
 
-import anthropic
-
 from . import config
+from .llm_backend import LLMBackend, create_backend
 
-_client: anthropic.Anthropic | None = None
+_backend: LLMBackend | None = None
 
 
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        config.require_api_key()
-        _client = anthropic.Anthropic()
-    return _client
+def _get_backend() -> LLMBackend:
+    global _backend
+    if _backend is None:
+        # Import backends package to trigger auto-registration
+        from . import backends  # noqa: F401
+        _backend = create_backend(config.LLM_BACKEND)
+    return _backend
 
 
 def _call(system: str, user: str, max_tokens: int) -> str:
-    response = _get_client().messages.create(
-        model=config.MODEL,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    return response.content[0].text
+    return _get_backend().call(system, user, max_tokens, config.MODEL)
 
 
 def _extract_json_block(text: str) -> dict:

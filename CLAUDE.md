@@ -11,8 +11,9 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 ## Environment
 
 - Python 3.10, virtualenv at `.venv/` — always prefix Python commands with `.venv/bin/`
-- `ANTHROPIC_API_KEY` — required for any LLM call
+- `AICOMPANY_LLM_BACKEND` — optional, defaults to `anthropic` (pluggable: any backend implementing `LLMBackend` protocol)
 - `AICOMPANY_MODEL` — optional, defaults to `claude-sonnet-4-6`
+- `ANTHROPIC_API_KEY` — required when using the `anthropic` backend
 
 ---
 
@@ -55,15 +56,17 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 
 ```
 aicompany/          core package
-  config.py         paths + env vars
+  config.py         paths + env vars + backend selection
   models.py         dataclasses (Skill, Person, Team, Task, ProjectPlan, CompanyState, RequirementsEvaluation) + build_prompt()
+  llm_backend.py    LLMBackend protocol + backend registry (provider-agnostic)
+  backends/         provider implementations (anthropic, add your own)
   registry.py       all YAML file I/O (skills, persons, teams, plans, outputs)
-  llm.py            all Claude API calls (CTO / HR / evaluation / multi-person team execution)
+  llm.py            all LLM calls via backend abstraction (CTO / HR / evaluation / multi-person team execution)
   orchestrator.py   execution loop + topological sort + prompt composition
   oversight.py      human checkpoint (Approve/Reject/Modify)
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands (with interactive evaluation gate)
-tests/              pytest suite — 119 tests, all mocked
+tests/              pytest suite — 137 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen

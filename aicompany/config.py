@@ -10,6 +10,7 @@ SKILLS_DIR = COMPANY_DIR / "skills"
 PROJECTS_DIR = BASE_DIR / "projects"
 
 MODEL = os.environ.get("AICOMPANY_MODEL", "claude-sonnet-4-6")
+LLM_BACKEND = os.environ.get("AICOMPANY_LLM_BACKEND", "anthropic")
 
 MAX_TOKENS_CTO = 4096
 MAX_TOKENS_HR = 2048
@@ -20,13 +21,3 @@ MIN_REQUIREMENTS_LENGTH = 50   # characters — below this, reject as too vague
 MIN_SCORE_TO_PROCEED = 3.5    # overall score below this → hard block, cannot proceed
 MIN_DIMENSION_SCORE = 3       # any single dimension below this → hard block
 MAX_TOKENS_AUTOFIX = 4096     # token budget for requirements autofix
-
-
-def require_api_key() -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        raise EnvironmentError(
-            "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and fill it in, "
-            "then run: export ANTHROPIC_API_KEY=<your-key>"
-        )
-    return key
