@@ -1,10 +1,10 @@
 from collections import deque
 from datetime import datetime, timezone
 
-from . import oversight, registry
+from . import config, oversight, registry
 from .communication import create_session, run_pattern
 from .models import ProjectPlan, SessionRules, Task, build_prompt
-from .reasoner import LLMReasoner
+from .reasoner import ChatSessionReasoner, LLMReasoner, create_reasoner
 
 
 class OrchestratorError(Exception):
@@ -141,7 +141,12 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             session = create_session(task.id, [p.id for p in members], rules)
 
             context = _build_project_context(plan, completed_ids)
-            reasoner = LLMReasoner()
+            reasoner = create_reasoner()
+
+            # For chat_session backend: prepare per-person dirs and show instructions
+            if isinstance(reasoner, ChatSessionReasoner):
+                reasoner.prepare_all(members, skill_registry)
+                reasoner.print_instructions()
 
             output = run_pattern(
                 pattern_name=rules.pattern,

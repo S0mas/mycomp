@@ -104,7 +104,7 @@ class TestRunProjectDryRun:
     def test_dry_run_does_not_call_reasoner(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
         _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         mock_reasoner = _make_mock_reasoner()
-        with patch("aicompany.orchestrator.LLMReasoner", return_value=mock_reasoner):
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner):
             orchestrator.run_project(sample_plan.project_id, dry_run=True)
         mock_reasoner.think.assert_not_called()
 
@@ -118,7 +118,7 @@ class TestRunProjectDryRun:
 class TestRunProjectExecution:
     def _run_with_mocks(self, project_id, oversight_action="approved"):
         mock_reasoner = _make_mock_reasoner()
-        with patch("aicompany.orchestrator.LLMReasoner", return_value=mock_reasoner), \
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
              patch("aicompany.orchestrator.oversight") as mock_oversight:
 
             mock_oversight.checkpoint.return_value = (oversight_action, "")
@@ -176,7 +176,7 @@ class TestRunProjectExecution:
         write_skills(sample_skills)
 
         mock_reasoner = _make_mock_reasoner()
-        with patch("aicompany.orchestrator.LLMReasoner", return_value=mock_reasoner), \
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
              patch("aicompany.orchestrator.oversight") as mock_oversight:
             mock_oversight.checkpoint.return_value = ("approved", "")
             orchestrator.run_project(sample_plan.project_id)
@@ -188,7 +188,7 @@ class TestRunProjectExecution:
         sample_plan.status = "complete"
         _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         mock_reasoner = _make_mock_reasoner()
-        with patch("aicompany.orchestrator.LLMReasoner", return_value=mock_reasoner):
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner):
             orchestrator.run_project(sample_plan.project_id)
             mock_reasoner.think.assert_not_called()
         assert "already complete" in capsys.readouterr().out
@@ -197,7 +197,7 @@ class TestRunProjectExecution:
         _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
         mock_reasoner = MagicMock()
         mock_reasoner.think.side_effect = Exception("API timeout")
-        with patch("aicompany.orchestrator.LLMReasoner", return_value=mock_reasoner), \
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
              patch("aicompany.orchestrator.oversight") as mock_oversight:
             mock_oversight.checkpoint.return_value = ("approved", "")
             with pytest.raises(OrchestratorError, match="API timeout"):
