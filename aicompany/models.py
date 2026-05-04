@@ -427,3 +427,26 @@ class Session:
         """Get all messages a person has received (including system)."""
         return [m for m in self.messages
                 if m.recipient in (person_id, "team") or m.sender == person_id]
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "participants": self.participants,
+            "rules": self.rules.to_dict(),
+            "messages": [m.to_dict() for m in self.messages],
+            "round": self.round,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Session":
+        return cls(
+            id=d["id"],
+            task_id=d["task_id"],
+            participants=d.get("participants", []),
+            rules=SessionRules.from_dict(d.get("rules", {})),
+            messages=[Message.from_dict(m) for m in d.get("messages", [])],
+            round=d.get("round", 0),
+            status=d.get("status", "active"),
+        )

@@ -216,3 +216,40 @@ class TestListProjects:
         write_plan(sample_plan)
         projects = registry.list_projects()
         assert sample_plan.project_id in projects
+
+
+class TestSessionPersistence:
+    def test_save_and_load_session_round_trip(self, isolated_fs):
+        from aicompany.models import Message, Session, SessionRules
+        session = Session(
+            id="sess_abc", task_id="task_001", participants=["alice", "bob"],
+            rules=SessionRules(pattern="lead_delegates", max_rounds=3),
+        )
+        session.messages.append(
+            Message(sender="alice", recipient="bob", kind="brief", content="Do the thing")
+        )
+        session.round = 1
+        session.status = "complete"
+
+        (config.PROJECTS_DIR / "proj_test").mkdir(parents=True, exist_ok=True)
+        registry.save_session("proj_test", session)
+
+        loaded = registry.load_session("proj_test", "task_001")
+        assert loaded is not None
+        assert loaded.id == "sess_abc"
+        assert loaded.task_id == "task_001"
+        assert loaded.round == 1
+        assert loaded.status == "complete"
+        assert len(loaded.messages) == 1
+        assert loaded.messages[0].content == "Do the thing"
+        assert loaded.rules.pattern == "lead_delegates"
+
+    def test_load_session_returns_none_if_missing(self, isolated_fs):
+        assert registry.load_session("proj_nonexistent", "task_001") is None
+
+    def test_save_session_creates_sessions_dir(self, isolated_fs):
+        from aicompany.models import Session
+        session = Session(id="s", task_id="t1", participants=[])
+        (config.PROJECTS_DIR / "proj_x").mkdir(parents=True, exist_ok=True)
+        registry.save_session("proj_x", session)
+        assert (config.PROJECTS_DIR / "proj_x" / "sessions" / "t1.json").exists()

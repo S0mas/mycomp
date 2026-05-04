@@ -76,7 +76,7 @@ aicompany/          core package
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 196 tests, all mocked
+tests/              pytest suite — 200 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
@@ -84,6 +84,12 @@ company/            runtime state — gitignored, created by init
   persons/          one YAML per person (identity, skills refs, knowledge, rules)
   teams/            one YAML per team (members, lead_id)
 projects/           runtime project data — gitignored
+  <project_id>/
+    plan.yaml         project plan + task statuses
+    requirements.md   original requirements text
+    outputs/          one .md per task — final agent output
+    sessions/         one .json per task — full message log (all agent exchanges)
+    decisions/        human checkpoint decisions
 ```
 
 ---

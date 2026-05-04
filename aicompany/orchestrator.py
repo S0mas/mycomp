@@ -133,6 +133,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
         task.status = "running"
         registry.save_plan(plan)
 
+        session = None
         try:
             team, lead, members, skill_registry = registry.load_team_with_members(task.assigned_team)
 
@@ -158,10 +159,13 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             )
 
         except Exception as exc:
+            if session is not None:
+                registry.save_session(project_id, session)
             task.status = "failed"
             registry.save_plan(plan)
             raise OrchestratorError(f"Task {task.id} failed: {exc}") from exc
 
+        registry.save_session(project_id, session)
         rel_path = registry.save_output(project_id, task.id, output)
         task.output_file = rel_path
         task.status = "done"

@@ -161,6 +161,7 @@ def create_project_dir(project_id: str, requirements_text: str) -> Path:
     d = project_dir(project_id)
     (d / "decisions").mkdir(parents=True, exist_ok=True)
     (d / "outputs").mkdir(parents=True, exist_ok=True)
+    (d / "sessions").mkdir(parents=True, exist_ok=True)
     (d / "requirements.md").write_text(requirements_text, encoding="utf-8")
     return d
 
@@ -192,6 +193,28 @@ def load_output(project_id: str, task_id: str) -> str | None:
     if path.exists():
         return path.read_text(encoding="utf-8")
     return None
+
+
+def save_session(project_id: str, session) -> str:
+    """Persist a Session's full message log as JSON. Returns relative path."""
+    import json
+    path = project_dir(project_id) / "sessions" / f"{session.task_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(session.to_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return str(path.relative_to(project_dir(project_id)))
+
+
+def load_session(project_id: str, task_id: str):
+    """Load a persisted Session. Returns None if not found."""
+    import json
+    from .models import Session
+    path = project_dir(project_id) / "sessions" / f"{task_id}.json"
+    if not path.exists():
+        return None
+    return Session.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 def save_decision(project_id: str, task_id: str, record: dict) -> None:

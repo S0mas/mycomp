@@ -167,6 +167,14 @@ class TestRunProjectExecution:
         assert output is not None
         assert "Task output" in output
 
+    def test_session_recorded_after_task(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
+        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
+        self._run_with_mocks(sample_plan.project_id)
+        session = registry.load_session(sample_plan.project_id, "task_001")
+        assert session is not None
+        assert session.task_id == "task_001"
+        assert len(session.messages) > 0
+
     def test_already_done_tasks_skipped(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
         sample_plan.tasks[0].status = "done"
         write_plan(sample_plan)
