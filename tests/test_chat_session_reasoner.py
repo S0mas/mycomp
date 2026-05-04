@@ -56,6 +56,7 @@ class TestPrepareAndInstructions:
         loop = (pdir / "loop.py").read_text()
         assert "EXCHANGE_DIR" in loop
         assert str(pdir) in loop
+        assert "Alice" in loop  # persona embedded in script
 
     def test_prepare_all(self, exchange_dir, person_alice, person_bob):
         r = ChatSessionReasoner(exchange_root=exchange_dir)

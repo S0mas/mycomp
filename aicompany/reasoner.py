@@ -134,7 +134,7 @@ class ChatSessionReasoner:
         persona_card = self._build_persona_card(person, skill_registry)
         (pdir / "persona.md").write_text(persona_card, encoding="utf-8")
         # Write the monitoring loop script
-        loop_script = self._build_loop_script(person, pdir)
+        loop_script = self._build_loop_script(person, pdir, skill_registry)
         (pdir / "loop.py").write_text(loop_script, encoding="utf-8")
         self._prepared_persons[person.id] = person
         return pdir
@@ -151,7 +151,7 @@ class ChatSessionReasoner:
     def print_instructions(self) -> str:
         """
         Return (and print) user-facing instructions: how many tabs to open
-        and the exact message to paste into each.
+        and what to tell each AI.
         """
         if not self._prepared_persons:
             return ""
@@ -163,29 +163,14 @@ class ChatSessionReasoner:
             "=" * 70,
             "",
             f"  Open {len(self._prepared_persons)} separate AI chat tab(s).",
-            f"  Exchange directory: {self._root}",
-            "",
-            "  WORKFLOW:",
-            "    1. Paste the init message into each tab.",
-            "    2. The AI runs loop.py which handles polling + I/O.",
-            "    3. loop.py prints prompts, AI types responses, loop.py submits.",
-            "    4. Fully automatic after setup — just watch.",
+            f"  Tell each AI to run its loop.py script (it prints identity + rules on startup).",
             "",
         ]
 
         for i, (pid, person) in enumerate(self._prepared_persons.items(), 1):
             pdir = self._root / pid
-            init_message = self._build_init_message(person, pdir)
-
-            lines.append(f"  ── Tab {i}: {person.name} ({person.role}) ──")
-            lines.append(f"  Exchange dir: {pdir}")
-            lines.append(f"  Loop script: {pdir}/loop.py")
-            lines.append("")
-            lines.append("  Paste the following message into the tab:")
-            lines.append("  " + "─" * 50)
-            for ml in init_message.splitlines():
-                lines.append(f"  {ml}")
-            lines.append("  " + "─" * 50)
+            lines.append(f"  Tab {i}: {person.name} ({person.role})")
+            lines.append(f"    → Tell the AI: python3 {pdir}/loop.py")
             lines.append("")
 
         lines.append("=" * 70)
@@ -302,9 +287,16 @@ A script called `loop.py` in this directory handles everything:
 You just run `loop.py` and answer the prompts it gives you.
 """
 
-    def _build_loop_script(self, person: Person, pdir: Path) -> str:
-        """Build a Python monitoring loop script for a person."""
-        # Use .format() to avoid nested f-string escaping issues
+    def _build_loop_script(self, person: Person, pdir: Path, skill_registry: dict | None = None) -> str:
+        """Build a Python monitoring loop script for a person.
+
+        The script prints the full identity/persona and rules on startup,
+        so the AI sees everything it needs just by running it.
+        """
+        persona_card = self._build_persona_card(person, skill_registry)
+        # Escape backslashes and triple-quotes for safe embedding
+        escaped_persona = persona_card.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+
         template = '''\
 #!/usr/bin/env python3
 """
@@ -318,8 +310,22 @@ from pathlib import Path
 
 EXCHANGE_DIR = Path(r"{exchange_dir}")
 PERSON_NAME = "{name}"
+PERSON_ID = "{pid}"
 PERSON_ROLE = "{role}"
 POLL_INTERVAL = 2  # seconds
+
+IDENTITY = """{persona}"""
+
+RULES = """
+RULES — read carefully:
+1. You ARE this person. Stay in character for every response.
+2. When a request arrives, this script prints the SYSTEM PROMPT and YOUR TASK.
+3. Read both carefully, then type your response.
+4. When finished, type a line containing ONLY: ===END===
+5. The script submits your response and waits for the next request.
+6. Type ONLY your response content — no meta-commentary like "Here is my answer".
+7. Do NOT stop the script unless told to.
+"""
 
 
 def wait_for_request():
@@ -344,6 +350,10 @@ def main():
     print("  Exchange dir: " + str(EXCHANGE_DIR))
     print("=" * 60)
     print()
+    print(IDENTITY)
+    print()
+    print(RULES)
+    print()
     print("Waiting for first request...")
     print()
 
@@ -359,11 +369,11 @@ def main():
         print("  REQUEST #" + str(round_num))
         print("=" * 60)
         print()
-        print("── SYSTEM PROMPT ──")
+        print("-- SYSTEM PROMPT --")
         print()
         print(system)
         print()
-        print("── YOUR TASK ──")
+        print("-- YOUR TASK --")
         print()
         print(user)
         print()
@@ -404,34 +414,8 @@ if __name__ == "__main__":
             pid=person.id,
             role=person.role,
             exchange_dir=pdir,
+            persona=escaped_persona,
         )
-
-    def _build_init_message(self, person: Person, pdir: Path) -> str:
-        """Build the message a user should paste into a new chat tab."""
-        return f"""\
-You are **{person.name}** (id: `{person.id}`, role: `{person.role}`).
-
-Run this command in your terminal right now:
-
-```
-python3 {pdir}/loop.py
-```
-
-This starts your work loop. The script will:
-1. Wait for a request from the orchestrator.
-2. Print the SYSTEM PROMPT (your identity/rules) and YOUR TASK.
-3. You read both carefully, then type your response.
-4. When finished, type a line containing ONLY: ===END===
-5. The script submits your response and waits for the next request.
-
-RULES:
-- Start the script IMMEDIATELY.
-- Follow the SYSTEM PROMPT for each request — it defines who you are.
-- Type ONLY your response content — no "Here is my answer", no explanation.
-- After typing ===END=== wait for the next request to appear.
-- Do NOT stop the script unless I tell you to.
-
-Run the command above now."""
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
