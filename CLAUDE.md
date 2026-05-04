@@ -56,15 +56,18 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 ```
 aicompany/          core package
   config.py         paths + env vars
-  models.py         dataclasses (Team, Task, ProjectPlan, CompanyState)
-  registry.py       all YAML file I/O
-  llm.py            all Claude API calls (CTO / HR / team agents)
+  models.py         dataclasses (Person, Team, Task, ProjectPlan, CompanyState)
+  registry.py       all YAML file I/O (teams, persons, plans, outputs)
+  llm.py            all Claude API calls (CTO / HR / multi-person team execution)
   orchestrator.py   execution loop + topological sort
   oversight.py      human checkpoint (Approve/Reject/Modify)
   cli.py            Click commands
 tests/              pytest suite — 83 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md
 company/            runtime state — gitignored, created by init
+  state.yaml        teams + persons + technologies_seen
+  teams/            one YAML per team
+  persons/          one YAML per person
 projects/           runtime project data — gitignored
 ```
 

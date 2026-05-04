@@ -44,15 +44,24 @@ The long-term goal is to automate or augment every phase of the software develop
 
 ---
 
-## What "Teams" Mean
+## What "Teams" and "Persons" Mean
 
-A team is not a group of people. It is an AI agent with:
-- A **role** (e.g., Backend Engineer, DevOps Engineer, Security Auditor)
-- A **skill set** that determines which tasks it is assigned
+A **person** is an individual AI agent with:
+- A **role** (lead, coder, reviewer, architect, or specialist)
 - A **system prompt** that defines how it thinks, what it produces, and how it formats output
 - An optional **tool list** for future integrations (web search, code execution, file access)
 
-Teams are created on demand. When the CTO's plan requires a skill the company doesn't have, the HR agent designs a new team. That team is saved to the company registry and reused in future projects.
+A **team** is a group of persons who collaborate on a task:
+- A **skill set** that determines which tasks the team is assigned
+- A **lead** who coordinates the work — they write a brief, assign sub-tasks, and synthesize the final output
+- **Members** (coders, reviewers, etc.) who each execute their part based on the lead's brief
+
+Teams are created on demand. When the CTO's plan requires a skill the company doesn't have, the HR agent designs a new team with the right persons. That team and its persons are saved to the company registry and reused in future projects.
+
+Task execution follows a three-step flow:
+1. The **lead** analyses the task and writes a brief assigning sub-tasks to each member
+2. Each **member** executes their assigned sub-task independently
+3. The **lead** synthesizes all contributions into a single coherent deliverable
 
 ---
 

@@ -41,7 +41,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 python main.py init
 ```
 
-Creates `company/state.yaml` and seeds two starter teams: `backend_engineer` and `frontend_engineer`.
+Creates `company/state.yaml` and seeds two starter teams: `backend_team` (lead + coder + reviewer) and `frontend_team` (lead + coder). Each team is composed of individual AI persons with specialised roles and system prompts.
 
 ### 4. Start a project
 

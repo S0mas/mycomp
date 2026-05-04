@@ -14,7 +14,7 @@ mycomp/
 ├── aicompany/                     # Core package — all business logic lives here
 │   ├── __init__.py
 │   ├── config.py                  # Paths, env vars, model constant
-│   ├── models.py                  # Dataclasses: Team, Task, ProjectPlan, CompanyState
+│   ├── models.py                  # Dataclasses: Person, Team, Task, ProjectPlan, CompanyState
 │   ├── registry.py                # All file I/O — reads and writes YAML/Markdown
 │   ├── llm.py                     # All Claude API calls — CTO, HR, team agents
 │   ├── orchestrator.py            # Project execution loop
@@ -22,10 +22,17 @@ mycomp/
 │   └── cli.py                     # Click commands: init, new-project, run, status
 │
 ├── company/                       # Runtime — gitignored, created by `init`
-│   ├── state.yaml                 # Company registry (all teams + technologies seen)
-│   └── teams/
-│       ├── backend_engineer.yaml  # Seeded by init
-│       ├── frontend_engineer.yaml # Seeded by init
+│   ├── state.yaml                 # Company registry (all teams + persons + technologies seen)
+│   ├── teams/
+│   │   ├── backend_team.yaml      # Seeded by init
+│   │   ├── frontend_team.yaml     # Seeded by init
+│   │   └── *.yaml                 # Created by HR agent on demand
+│   └── persons/
+│       ├── backend_lead.yaml      # Seeded by init
+│       ├── backend_coder.yaml     # Seeded by init
+│       ├── backend_reviewer.yaml  # Seeded by init
+│       ├── frontend_lead.yaml     # Seeded by init
+│       ├── frontend_coder.yaml    # Seeded by init
 │       └── *.yaml                 # Created by HR agent on demand
 │
 ├── projects/                      # Runtime — gitignored, created per project
@@ -54,16 +61,27 @@ mycomp/
 
 All models live in `aicompany/models.py`. They are plain Python dataclasses with `from_dict` / `to_dict` methods for YAML serialisation.
 
-### `Team`
-Represents one AI agent role in the company registry.
+### `Person`
+An individual AI agent within a team. Each person has a distinct role and system prompt.
 
 ```
-id              str       snake_case identifier (e.g. backend_engineer)
+id              str       snake_case identifier (e.g. backend_lead, backend_coder)
 name            str       Human-readable label
-skills          list[str] Skill tags used for task assignment
-system_prompt   str       Full system prompt fed to Claude when this team executes a task
+role            str       "lead" | "coder" | "reviewer" | "architect" | "specialist"
+system_prompt   str       Full system prompt fed to Claude when this person executes work
 tools           list      Reserved for future tool definitions
-context_notes   str       Optional background context prepended at runtime
+created_at      str       ISO 8601 UTC timestamp
+```
+
+### `Team`
+A group of persons who collaborate on tasks. One member is the lead — they coordinate the others.
+
+```
+id              str       snake_case identifier (e.g. backend_team)
+name            str       Human-readable label
+skills          list[str] Skill tags used for task assignment matching
+members         list[str] Person IDs belonging to this team
+lead_id         str       Person ID of the team lead
 created_at      str       ISO 8601 UTC timestamp
 ```
 
@@ -74,6 +92,7 @@ The master registry — one file at `company/state.yaml`.
 version             str       Schema version
 created_at          str       ISO 8601 UTC timestamp
 teams               list      Slim team entries: {id, name, skills} — full configs in teams/*.yaml
+persons             list      Slim person entries: {id, name, role} — full configs in persons/*.yaml
 technologies_seen   list[str] Accumulated across all projects
 ```
 
@@ -128,30 +147,36 @@ Helper properties worth knowing:
 - `Team.skill_set` — lowercase set of skills, used for case-insensitive matching
 - `CompanyState.all_skills()` — union of all team skill sets
 - `CompanyState.team_ids()` — list of all registered team IDs
+- `CompanyState.person_ids()` — list of all registered person IDs
 - `ProjectPlan.task_by_id(id)` — lookup a task by ID, returns `None` if not found
 
 ### `registry.py`
 All YAML and Markdown file I/O. No logic beyond reading and writing — deliberately thin. Every function has a single responsibility.
 
-Company functions: `load_state`, `save_state`, `load_team`, `save_team`, `find_missing_skills`, `find_team_for_skill`
+Company functions: `load_state`, `save_state`, `load_team`, `save_team`, `load_person`, `save_person`, `load_team_with_members`, `find_missing_skills`, `find_team_for_skill`
 
 Project functions: `create_project_dir`, `load_plan`, `save_plan`, `save_output`, `load_output`, `save_decision`, `list_projects`
 
-Side-effect to know: `save_team` also updates `state.yaml` automatically — it keeps the slim team entry in the registry in sync with the full team YAML file.
+Side-effects to know: `save_team` and `save_person` both auto-update `state.yaml` — they keep the slim entries in the registry in sync with the full YAML files.
 
 ### `llm.py`
-The only module that talks to Claude. Three public functions, one private helper:
+The only module that talks to Claude. Public functions and one private helper:
 
 | Function | Role | Output |
 |---|---|---|
 | `cto_analyze(requirements, state_yaml)` | CTO | Plan dict |
-| `hr_create_team(skill_name, tech_context)` | HR / Team Builder | Team dict |
-| `team_execute_task(system_prompt, title, description, context)` | Team agent | Markdown string |
+| `hr_create_team(skill_name, tech_context)` | HR / Team Builder | Dict with `team` and `persons` keys |
+| `team_brief(lead_prompt, title, description, context, members)` | Team lead | Markdown brief assigning sub-tasks to each member |
+| `person_execute(person_prompt, person_name, brief, title)` | Team member | Markdown output for their sub-task |
+| `team_synthesize(lead_prompt, title, contributions)` | Team lead | Final unified Markdown output |
 | `_extract_json_block(text)` | Internal | Parsed dict from a ```json fence |
 
 CTO and HR calls ask Claude to return **only a ```json block** — no prose. `_extract_json_block` finds and parses it, with fallbacks for bare fences and raw JSON.
 
-Team agent calls return raw Markdown — no parsing needed. The output is saved directly as a `.md` file.
+Team execution follows a three-step multi-person flow:
+1. **Brief** — the lead analyses the task and assigns sub-tasks to each member
+2. **Execute** — each non-lead member produces their contribution based on the brief
+3. **Synthesize** — the lead merges all contributions into one coherent deliverable
 
 ### `orchestrator.py`
 The execution engine. Entry point is `run_project(project_id, dry_run=False)`.
@@ -166,7 +191,8 @@ Execution flow:
    - Raise `OrchestratorError` if dependency is unsatisfied for any other reason
    - If `is_checkpoint` and not dry-run: call `oversight.checkpoint()`
    - If dry-run: print and add to `completed_ids`, then continue
-   - Load team, call `llm.team_execute_task()`
+   - Load team and all its persons via `registry.load_team_with_members()`
+   - Execute the three-step multi-person flow: `llm.team_brief()` → `llm.person_execute()` (per member) → `llm.team_synthesize()`
    - Save output, mark task done, save plan (crash-safe — persisted after every task)
 5. Mark plan `complete` when all tasks are done or failed
 
@@ -187,7 +213,7 @@ Click command group. Thin wiring layer — no business logic. Each command does:
 
 | Command | What it does |
 |---|---|
-| `init` | Creates `company/state.yaml`, seeds `backend_engineer` and `frontend_engineer` teams |
+| `init` | Creates `company/state.yaml`, seeds `backend_team` (lead + coder + reviewer) and `frontend_team` (lead + coder) with their persons |
 | `new-project <file>` | Reads requirements → CTO analysis → HR for missing teams → saves project plan |
 | `run <project-id>` | Delegates to `orchestrator.run_project()` |
 | `run --dry-run <id>` | Same but with `dry_run=True` — no LLM calls, no checkpoints |
@@ -210,8 +236,11 @@ User
   │
   ├─► registry.find_missing_skills()
   │
-  ├─► llm.hr_create_team()       → team dict    (for each missing skill)
+  ├─► llm.hr_create_team()       → team + persons dicts (for each missing skill)
   │       Claude (HR role)
+  │
+  ├─► registry.save_person()     → company/persons/{id}.yaml (for each person)
+  │                                 company/state.yaml (synced)
   │
   ├─► registry.save_team()       → company/teams/{id}.yaml
   │                                 company/state.yaml (synced)
@@ -231,10 +260,17 @@ User
               │       User: Approve / Reject / Modify
               │       → projects/{id}/decisions/{ts}_{task_id}.md
               │
-              ├── registry.load_team()
+              ├── registry.load_team_with_members()
+              │       → (team, lead_person, [member_persons])
               │
-              ├── llm.team_execute_task()
-              │       Claude (team's system_prompt)
+              ├── llm.team_brief()
+              │       Claude (lead's system_prompt) → work brief
+              │
+              ├── llm.person_execute()        (for each non-lead member)
+              │       Claude (member's system_prompt) → contribution
+              │
+              ├── llm.team_synthesize()
+              │       Claude (lead's system_prompt) → final Markdown
               │
               └── registry.save_output()     → projects/{id}/outputs/{task_id}.md
                   registry.save_plan()       → status updated after every task
