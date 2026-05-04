@@ -18,3 +18,4 @@ company/teams/
 
 # Runtime project data — generated per project execution
 projects/
+reqs*.md
