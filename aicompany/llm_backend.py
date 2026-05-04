@@ -29,6 +29,17 @@ class LLMBackend(Protocol):
 class Reasoner(Protocol):
     """Turns a Person + messages into a response. The 'brain' behind a Person."""
 
+    def setup(
+        self,
+        persons: list[Person],
+        skill_registry: dict | None = None,
+    ) -> None:
+        """
+        Prepare the reasoner for a session with the given persons.
+        Called once before think() calls begin. Default is a no-op.
+        """
+        ...
+
     def think(
         self,
         person: Person,

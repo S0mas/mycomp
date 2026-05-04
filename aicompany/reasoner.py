@@ -30,6 +30,9 @@ class LLMReasoner:
             backend = create_backend(config.LLM_BACKEND)
         self._backend = backend
 
+    def setup(self, persons: list[Person], skill_registry: dict | None = None) -> None:
+        """No-op — API-based backends don't need per-person preparation."""
+
     def think(
         self,
         person: Person,
@@ -106,6 +109,15 @@ class ChatSessionReasoner:
         self._prepared_persons: dict[str, Person] = {}
 
     # ── Setup ─────────────────────────────────────────────────────────────
+
+    def setup(
+        self,
+        persons: list[Person],
+        skill_registry: dict | None = None,
+    ) -> None:
+        """Prepare per-person exchange dirs and print tab instructions."""
+        self.prepare_all(persons, skill_registry)
+        self.print_instructions()
 
     def prepare_person(
         self,
