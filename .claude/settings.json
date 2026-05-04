@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport sys, json, subprocess\nd = json.load(sys.stdin)\nf = d.get('tool_input', {}).get('file_path') or d.get('tool_response', {}).get('filePath', '')\nif f.endswith('.py'):\n    r = subprocess.run(['/home/s0mas/mycomp/.venv/bin/pytest', '/home/s0mas/mycomp/tests/', '-q'], cwd='/home/s0mas/mycomp')\n    sys.exit(r.returncode)\n\"",
+            "timeout": 60,
+            "statusMessage": "Running test suite..."
+          }
+        ]
+      }
+    ]
+  }
+}
