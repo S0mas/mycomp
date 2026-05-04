@@ -207,6 +207,39 @@ Team execution follows a three-step multi-person flow:
 2. **Execute** — each non-lead member produces their contribution based on the brief
 3. **Synthesize** — the lead merges all contributions into one coherent deliverable
 
+### `reasoner.py`
+A Reasoner is the "brain" behind a Person — it receives Messages, composes prompts, and produces responses. Two implementations:
+
+| Implementation | Backend | How it works |
+|---|---|---|
+| `LLMReasoner` | Any `LLMBackend` (anthropic, openai, fake) | Calls API directly |
+| `ChatSessionReasoner` | File exchange (`AICOMPANY_LLM_BACKEND=chat_session`) | Per-person dirs with atomic poll/submit protocol |
+
+**ChatSessionReasoner file protocol (race-free):**
+
+```
+Orchestrator                          AI (via worker.py)
+    │                                      │
+    ├─ write request.json                  │
+    ├─ write READY.tmp → rename READY      │  (atomic signal)
+    │                                      │
+    │                        poll ─────────┤  deletes READY (claims work)
+    │                                      ├─ reads request.json, prints task
+    │                                      │
+    │                        submit ───────┤  writes response.tmp → rename response.txt
+    │                                      │  (atomic, no partial reads)
+    ├─ detects response.txt                │
+    ├─ reads it, cleans up                 │
+    ▼                                      ▼
+```
+
+Each person's `worker.py` is a non-blocking CLI tool:
+- `python3 worker.py poll` — check for work, print request if available
+- `python3 worker.py submit << 'EOF'` — atomically write response from stdin
+- `python3 worker.py identity` — print persona card
+
+`create_reasoner()` factory selects implementation based on `config.LLM_BACKEND`.
+
 ### `orchestrator.py`
 The execution engine. Entry point is `run_project(project_id, dry_run=False)`.
 
