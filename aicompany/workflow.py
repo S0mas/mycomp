@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import uuid
 
+import yaml
+
 from . import config, llm, registry
+from .communication import create_session, run_pattern
 from .models import (
-    CompanyState, Person, ProjectPlan, RequirementsEvaluation,
-    Skill, Task, Team,
+    CompanyState, Person, ProjectPlan, Requirement, RequirementsEvaluation,
+    SessionRules, Skill, Task, Team,
 )
+from .reasoner import create_reasoner
 from .validation import validate_cto_plan, validate_hr_response
 
 
@@ -53,12 +57,14 @@ _FIX_HINTS = {
 }
 
 
-def evaluate_and_gate(requirements_text: str, state_yaml: str) -> EvaluationResult:
+def evaluate_and_gate(requirements_text: str) -> EvaluationResult:
     """
     Evaluate requirements quality and determine if planning can proceed.
 
     Returns an EvaluationResult with the evaluation and any blockers.
     """
+    state = registry.load_state()
+    state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
     eval_dict = llm.evaluate_requirements(requirements_text, state_yaml)
     evaluation = RequirementsEvaluation.from_dict(eval_dict)
 
@@ -115,34 +121,71 @@ class PlanResult:
         self.hr_warnings = hr_warnings
 
 
+def _run_cto_planning(requirements_text: str, state_yaml: str, on_status: callable) -> dict:
+    """
+    Run the CTO team through the pair_review pattern to produce a project plan dict.
+
+    The CTO team (cto + cto_analyst) uses the same Reasoner/Session infrastructure
+    as all other agents. Returns the parsed JSON plan dict.
+    """
+    on_status("CTO team is analysing requirements...")
+    team, lead, members, skill_registry = registry.load_team_with_members("cto_team")
+    rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
+    session = create_session("cto_planning", [p.id for p in members], rules)
+    reasoner = create_reasoner()
+    reasoner.setup(members, skill_registry)
+
+    task_description = (
+        f"## Client Requirements\n\n{requirements_text}\n\n"
+        f"## Current Company Registry (YAML)\n\n```yaml\n{state_yaml}\n```"
+    )
+
+    cto_output = run_pattern(
+        pattern_name=rules.pattern,
+        session=session,
+        lead=lead,
+        members=members,
+        task_title="Project Planning",
+        task_description=task_description,
+        project_context="",
+        reasoner=reasoner,
+        skill_registry=skill_registry,
+        workspace="",   # CTO does no file I/O
+        on_status=on_status,
+    )
+
+    return llm.extract_json_block(cto_output)
+
+
 def plan_and_create_project(
     requirements_text: str,
-    state_yaml: str,
     on_status: callable = None,
 ) -> PlanResult:
     """
-    Run CTO analysis, create missing teams via HR, assemble and persist the project.
+    Run CTO planning, create missing teams via HR, assemble and persist the project.
 
     Args:
         requirements_text: The requirements document.
-        state_yaml: Current company state as YAML string.
         on_status: Optional callback for progress messages.
 
     Returns a PlanResult with the project plan and metadata.
     """
     _status = on_status or (lambda msg: None)
 
-    # ── CTO planning ──────────────────────────────────────────────────────
-    _status("CTO is analysing requirements...")
-    plan_dict = llm.cto_analyze(requirements_text, state_yaml)
+    state = registry.load_state()
+    state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
+
+    # ── CTO planning via team infrastructure ─────────────────────────────────
+    plan_dict = _run_cto_planning(requirements_text, state_yaml, _status)
     plan_warnings = validate_cto_plan(plan_dict)
 
     title = plan_dict.get("title", "Untitled Project")
     tech_stack = plan_dict.get("tech_stack", [])
     teams_required = plan_dict.get("teams_required", [])
     raw_tasks = plan_dict.get("tasks", [])
+    raw_requirements = plan_dict.get("requirements", [])
 
-    # ── HR team creation ──────────────────────────────────────────────────
+    # ── HR team creation ──────────────────────────────────────────────────────
     state = registry.load_state()
     missing_team_ids = [tid for tid in teams_required if tid not in state.team_ids()]
     created_teams: list[str] = []
@@ -173,15 +216,16 @@ def plan_and_create_project(
         created_teams.append(team_id)
         state = registry.load_state()
 
-    # ── Update technologies_seen ──────────────────────────────────────────
+    # ── Update technologies_seen ──────────────────────────────────────────────
     state = registry.load_state()
     for tech in tech_stack:
         if tech.lower() not in [t.lower() for t in state.technologies_seen]:
             state.technologies_seen.append(tech)
     registry.save_state(state)
 
-    # ── Assemble project ──────────────────────────────────────────────────
+    # ── Assemble project ──────────────────────────────────────────────────────
     project_id = f"proj_{uuid.uuid4().hex[:8]}"
+
     tasks = []
     for i, raw in enumerate(raw_tasks):
         task_id = raw.get("id", f"task_{i+1:03d}")
@@ -191,9 +235,12 @@ def plan_and_create_project(
             description=raw["description"],
             assigned_team=raw["assigned_team"],
             depends_on=raw.get("depends_on", []),
+            requirement_ids=raw.get("requirement_ids", []),
             is_checkpoint=raw.get("is_checkpoint", False),
             output_file=f"outputs/{task_id}.md",
         ))
+
+    requirements = [Requirement.from_dict(r) for r in raw_requirements]
 
     plan = ProjectPlan(
         project_id=project_id,
@@ -201,10 +248,13 @@ def plan_and_create_project(
         tech_stack=tech_stack,
         teams_required=teams_required,
         tasks=tasks,
+        requirements=requirements,
     )
 
     registry.create_project_dir(project_id, requirements_text)
     registry.save_plan(plan)
+    if requirements:
+        registry.save_requirements(project_id, requirements)
 
     return PlanResult(
         project_id=project_id,

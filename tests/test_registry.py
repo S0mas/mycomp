@@ -285,3 +285,75 @@ class TestMaterializeFiles:
         assert set(written) == {"a.py", "b.py"}
         assert (tmp_path / "a.py").exists()
         assert (tmp_path / "b.py").exists()
+
+
+class TestRequirements:
+    def test_save_and_load_requirements(self, sample_state, sample_plan):
+        from aicompany.models import Requirement, SubRequirement
+        write_state(sample_state)
+        registry.create_project_dir(sample_plan.project_id, "req text")
+
+        sub = SubRequirement(id="REQ-0001-001", parent_id="REQ-0001",
+                             title="Login", description="Can log in.",
+                             acceptance_criteria=["POST /login returns 200"])
+        req = Requirement(id="REQ-0001", title="Auth", description="Auth needed.",
+                          sub_requirements=[sub])
+
+        registry.save_requirements(sample_plan.project_id, [req])
+        loaded = registry.load_requirements(sample_plan.project_id)
+
+        assert len(loaded) == 1
+        assert loaded[0].id == "REQ-0001"
+        assert loaded[0].sub_requirements[0].id == "REQ-0001-001"
+        assert loaded[0].sub_requirements[0].acceptance_criteria == ["POST /login returns 200"]
+
+    def test_load_requirements_returns_empty_if_missing(self, sample_state, sample_plan):
+        write_state(sample_state)
+        registry.create_project_dir(sample_plan.project_id, "req text")
+        result = registry.load_requirements(sample_plan.project_id)
+        assert result == []
+
+
+class TestRequirementTestSuites:
+    def test_save_and_load_test_suite(self, sample_state, sample_plan):
+        from aicompany.models import RequirementTestSuite
+        write_state(sample_state)
+        registry.create_project_dir(sample_plan.project_id, "req text")
+
+        suite = RequirementTestSuite(id="SUITE-0001", requirement_id="REQ-0001",
+                          name="Auth Suite", test_ids=["TEST-0001-001"])
+        registry.save_test_suite(sample_plan.project_id, suite)
+        loaded = registry.load_test_suite(sample_plan.project_id, "SUITE-0001")
+
+        assert loaded.id == "SUITE-0001"
+        assert loaded.requirement_id == "REQ-0001"
+        assert loaded.test_ids == ["TEST-0001-001"]
+
+    def test_load_missing_suite_raises(self, sample_state, sample_plan):
+        write_state(sample_state)
+        registry.create_project_dir(sample_plan.project_id, "req text")
+        with pytest.raises(FileNotFoundError):
+            registry.load_test_suite(sample_plan.project_id, "SUITE-9999")
+
+
+class TestRequirementTest:
+    def test_save_requirement_test(self, sample_state, sample_plan):
+        from aicompany.models import RequirementTest
+        write_state(sample_state)
+        registry.create_project_dir(sample_plan.project_id, "req text")
+
+        rt = RequirementTest(id="TEST-0001-001", sub_req_id="REQ-0001-001",
+                             title="Login test",
+                             test_file="tests/requirements/test_REQ_0001_001.py")
+        registry.save_requirement_test(sample_plan.project_id, rt)
+
+        path = config.PROJECTS_DIR / sample_plan.project_id / "req_tests" / "TEST-0001-001.yaml"
+        assert path.exists()
+
+
+class TestProjectDirHasReqFolders:
+    def test_req_test_and_suite_dirs_created(self, sample_state, sample_plan):
+        write_state(sample_state)
+        d = registry.create_project_dir(sample_plan.project_id, "req text")
+        assert (d / "req_tests").exists()
+        assert (d / "test_suites").exists()

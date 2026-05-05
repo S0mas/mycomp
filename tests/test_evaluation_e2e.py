@@ -93,7 +93,10 @@ def _write_requirements(text: str) -> str:
 MOCK_CTO_RESPONSE = {
     "title": "Task Manager", "tech_stack": ["python", "fastapi"],
     "teams_required": ["backend_team"],
-    "tasks": [{"id": "t1", "title": "Build API", "description": "d", "assigned_team": "backend_team"}],
+    "requirements": [],
+    "tasks": [{"id": "t1", "title": "Build API", "description": "d",
+               "assigned_team": "backend_team", "depends_on": [], "is_checkpoint": False,
+               "requirement_ids": []}],
 }
 
 EVAL_PASS = {
@@ -126,9 +129,9 @@ class TestEvaluationGate:
     def test_good_requirements_proceed(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(GOOD_REQUIREMENTS)
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.workflow._run_cto_planning", return_value=MOCK_CTO_RESPONSE), \
+             patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_PASS
-            m.cto_analyze.return_value = MOCK_CTO_RESPONSE
             m.hr_create_team.return_value = MOCK_TEAM_RESPONSE
             result = runner.invoke(cli, ["new-project", path])
         assert result.exit_code == 0
@@ -137,25 +140,26 @@ class TestEvaluationGate:
     def test_mediocre_requirements_blocked(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(MEDIOCRE_REQUIREMENTS)
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.workflow._run_cto_planning") as mock_cto, \
+             patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert result.exit_code == 1
         assert "Cannot proceed" in result.output
         assert "Completeness" in result.output
-        # CTO should never be called
-        m.cto_analyze.assert_not_called()
+        mock_cto.assert_not_called()
 
     def test_terrible_requirements_blocked_with_reject(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(BAD_REQUIREMENTS)
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.workflow._run_cto_planning") as mock_cto, \
+             patch("aicompany.workflow.llm") as m:
             m.evaluate_requirements.return_value = EVAL_TERRIBLE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert result.exit_code == 1
         assert "REJECT" in result.output
         assert "Completely undefined scope" in result.output
-        m.cto_analyze.assert_not_called()
+        mock_cto.assert_not_called()
 
     def test_terrible_requirements_sanity_blocked(self, runner):
         """Requirements too short — blocked before even calling the LLM."""

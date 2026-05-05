@@ -164,12 +164,118 @@ class CompanyState:
 
 
 @dataclass
+class SubRequirement:
+    """One decomposed slice of a top-level Requirement, linked to acceptance criteria."""
+    id: str                 # e.g. REQ-0001-001
+    parent_id: str          # e.g. REQ-0001
+    title: str
+    description: str
+    acceptance_criteria: list = field(default_factory=list)
+    status: str = "pending"   # pending | verified | failed
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SubRequirement":
+        return cls(
+            id=d["id"],
+            parent_id=d.get("parent_id", ""),
+            title=d["title"],
+            description=d.get("description", ""),
+            acceptance_criteria=d.get("acceptance_criteria", []),
+            status=d.get("status", "pending"),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class Requirement:
+    """A top-level requirement that can be decomposed into sub-requirements."""
+    id: str                 # e.g. REQ-0001
+    title: str
+    description: str
+    sub_requirements: list = field(default_factory=list)   # list of SubRequirement dicts
+    status: str = "pending"   # pending | verified | failed
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Requirement":
+        subs = [SubRequirement.from_dict({**s, "parent_id": d["id"]})
+                for s in d.get("sub_requirements", [])]
+        return cls(
+            id=d["id"],
+            title=d["title"],
+            description=d.get("description", ""),
+            sub_requirements=subs,
+            status=d.get("status", "pending"),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "sub_requirements": [s.to_dict() for s in self.sub_requirements],
+            "status": self.status,
+        }
+
+    def all_sub_ids(self) -> list[str]:
+        return [s.id for s in self.sub_requirements]
+
+
+@dataclass
+class RequirementTest:
+    """A pytest test file that proves a specific sub-requirement is met."""
+    id: str                 # e.g. TEST-0001-001
+    sub_req_id: str         # e.g. REQ-0001-001
+    title: str
+    test_file: str          # workspace-relative path, e.g. tests/requirements/test_REQ_0001_001.py
+    status: str = "pending"   # pending | passing | failing
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RequirementTest":
+        return cls(
+            id=d["id"],
+            sub_req_id=d["sub_req_id"],
+            title=d["title"],
+            test_file=d.get("test_file", ""),
+            status=d.get("status", "pending"),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class RequirementTestSuite:
+    """Groups all RequirementTests for a single top-level Requirement."""
+    id: str                 # e.g. SUITE-0001
+    requirement_id: str     # e.g. REQ-0001
+    name: str
+    test_ids: list = field(default_factory=list)
+    status: str = "pending"   # pending | passing | failing
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RequirementTestSuite":
+        return cls(
+            id=d["id"],
+            requirement_id=d["requirement_id"],
+            name=d["name"],
+            test_ids=d.get("test_ids", []),
+            status=d.get("status", "pending"),
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class Task:
     id: str
     title: str
     description: str
     assigned_team: str
     depends_on: list = field(default_factory=list)
+    requirement_ids: list = field(default_factory=list)   # sub-requirement IDs this task addresses
     status: str = "pending"
     is_checkpoint: bool = False
     output_file: str = ""
@@ -182,6 +288,7 @@ class Task:
             description=d["description"],
             assigned_team=d["assigned_team"],
             depends_on=d.get("depends_on", []),
+            requirement_ids=d.get("requirement_ids", []),
             status=d.get("status", "pending"),
             is_checkpoint=d.get("is_checkpoint", False),
             output_file=d.get("output_file", ""),
@@ -200,6 +307,7 @@ class ProjectPlan:
     tech_stack: list = field(default_factory=list)
     teams_required: list = field(default_factory=list)
     tasks: list = field(default_factory=list)
+    requirements: list = field(default_factory=list)   # list of Requirement objects
     decisions_log: list = field(default_factory=list)
 
     @classmethod
@@ -212,6 +320,7 @@ class ProjectPlan:
             tech_stack=d.get("tech_stack", []),
             teams_required=d.get("teams_required", []),
             tasks=[Task.from_dict(t) for t in d.get("tasks", [])],
+            requirements=[Requirement.from_dict(r) for r in d.get("requirements", [])],
             decisions_log=d.get("decisions_log", []),
         )
 
@@ -224,6 +333,7 @@ class ProjectPlan:
             "tech_stack": self.tech_stack,
             "teams_required": self.teams_required,
             "tasks": [t.to_dict() for t in self.tasks],
+            "requirements": [r.to_dict() for r in self.requirements],
             "decisions_log": self.decisions_log,
         }
 
@@ -231,6 +341,19 @@ class ProjectPlan:
         for t in self.tasks:
             if t.id == task_id:
                 return t
+        return None
+
+    def requirement_by_id(self, req_id: str) -> Optional["Requirement"]:
+        for r in self.requirements:
+            if r.id == req_id:
+                return r
+        return None
+
+    def sub_requirement_by_id(self, sub_id: str) -> Optional["SubRequirement"]:
+        for r in self.requirements:
+            for s in r.sub_requirements:
+                if s.id == sub_id:
+                    return s
         return None
 
 

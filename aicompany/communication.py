@@ -10,10 +10,12 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
+from . import config
 from .models import Message, Person, Session, SessionRules
 
 if TYPE_CHECKING:
     from .llm_backend import Reasoner
+    from .models import Skill
 
 
 def create_session(
@@ -52,8 +54,8 @@ def run_lead_delegates(
     task_description: str,
     project_context: str,
     reasoner: Reasoner,
-    skill_registry: dict | None = None,
-    max_tokens: int = 4096,
+    skill_registry: "dict[str, Skill] | None" = None,
+    max_tokens: int = config.MAX_TOKENS_TEAM,
     on_status: callable = None,
     workspace: str = "",
 ) -> str:
@@ -147,8 +149,8 @@ def run_pair_review(
     task_description: str,
     project_context: str,
     reasoner: Reasoner,
-    skill_registry: dict | None = None,
-    max_tokens: int = 4096,
+    skill_registry: "dict[str, Skill] | None" = None,
+    max_tokens: int = config.MAX_TOKENS_TEAM,
     on_status: callable = None,
     workspace: str = "",
 ) -> str:
@@ -230,11 +232,120 @@ def run_pair_review(
     return final
 
 
+# ── Pattern: develop_test_review ─────────────────────────────────────────────
+
+def run_develop_test_review(
+    session: Session,
+    lead: Person,
+    members: list[Person],
+    task_title: str,
+    task_description: str,
+    project_context: str,
+    reasoner: "Reasoner",
+    skill_registry: "dict[str, Skill] | None" = None,
+    max_tokens: int = config.MAX_TOKENS_TEAM,
+    on_status: callable = None,
+    workspace: str = "",
+) -> str:
+    """
+    Develop-test-review pattern:
+      1. Lead briefs team (with task, project context, and requirement acceptance criteria)
+      2. Coder implements code via MCP tools
+      3. Tester writes requirement tests to tests/requirements/ via MCP
+      4. Reviewer reviews code + requirement tests together
+      5. Coder revises (if requested)
+      6. Lead synthesizes final output with traceability summary
+
+    Falls back to pair_review if no tester, or lead_delegates if no coder/reviewer/tester.
+    """
+    _status = on_status or (lambda msg: None)
+
+    coders = [m for m in members if m.role == "coder" and m.id != lead.id]
+    testers = [m for m in members if m.role == "tester" and m.id != lead.id]
+    reviewers = [m for m in members if m.role == "reviewer" and m.id != lead.id]
+
+    coder = coders[0] if coders else None
+    tester = testers[0] if testers else None
+    reviewer = reviewers[0] if reviewers else None
+
+    if not tester:
+        return run_pair_review(session, lead, members, task_title, task_description,
+                               project_context, reasoner, skill_registry, max_tokens,
+                               on_status, workspace)
+
+    if not coder or not reviewer:
+        return run_lead_delegates(session, lead, members, task_title, task_description,
+                                  project_context, reasoner, skill_registry, max_tokens,
+                                  on_status, workspace)
+
+    rules_text = session.rules.describe(lead.id, session.participants)
+
+    # ── Round 1: Lead briefs ──────────────────────────────────────────────────
+    task_msg = Message(
+        sender="orchestrator", recipient=lead.id, kind="task",
+        content=_format_task_for_lead(task_title, task_description, project_context, members),
+    )
+    session.add_message(task_msg)
+    _status(f"{lead.name} (lead) writing brief...")
+    brief = reasoner.think(lead, session.messages_for(lead.id),
+                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+    session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
+    session.advance_round()
+
+    # ── Round 2: Coder implements ─────────────────────────────────────────────
+    coder_rules = session.rules.describe(coder.id, session.participants)
+    _status(f"{coder.name} (coder) implementing...")
+    code = reasoner.think(coder, session.messages_for(coder.id),
+                          skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
+    session.add_message(Message(sender=coder.id, recipient=tester.id, kind="result", content=code))
+    session.advance_round()
+
+    # ── Round 3: Tester writes requirement tests ──────────────────────────────
+    tester_rules = session.rules.describe(tester.id, session.participants)
+    _status(f"{tester.name} (tester) writing requirement tests...")
+    tests = reasoner.think(tester, session.messages_for(tester.id),
+                           skill_registry, _agent_rules(tester_rules, workspace), max_tokens)
+    session.add_message(Message(sender=tester.id, recipient=reviewer.id, kind="result", content=tests))
+
+    if session.is_complete():
+        final = brief
+        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+        session.complete()
+        return final
+
+    session.advance_round()
+
+    # ── Round 4: Reviewer reviews code + tests ────────────────────────────────
+    reviewer_rules = session.rules.describe(reviewer.id, session.participants)
+    _status(f"{reviewer.name} (reviewer) reviewing code and requirement tests...")
+    review = reasoner.think(reviewer, session.messages_for(reviewer.id),
+                            skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
+    session.add_message(Message(sender=reviewer.id, recipient=coder.id, kind="review", content=review))
+
+    if not session.is_complete():
+        session.advance_round()
+
+        # ── Round 5: Coder revises ────────────────────────────────────────────
+        _status(f"{coder.name} (coder) revising...")
+        revised = reasoner.think(coder, session.messages_for(coder.id),
+                                 skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
+        session.add_message(Message(sender=coder.id, recipient=lead.id, kind="result", content=revised))
+
+    # ── Round 6: Lead synthesizes ─────────────────────────────────────────────
+    _status(f"{lead.name} (lead) finalizing with traceability summary...")
+    final = reasoner.think(lead, session.messages_for(lead.id),
+                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+    session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+    session.complete()
+    return final
+
+
 # ── Pattern registry ──────────────────────────────────────────────────────────
 
 PATTERNS = {
     "lead_delegates": run_lead_delegates,
     "pair_review": run_pair_review,
+    "develop_test_review": run_develop_test_review,
 }
 
 
@@ -247,8 +358,8 @@ def run_pattern(
     task_description: str,
     project_context: str,
     reasoner: Reasoner,
-    skill_registry: dict | None = None,
-    max_tokens: int = 4096,
+    skill_registry: "dict[str, Skill] | None" = None,
+    max_tokens: int = config.MAX_TOKENS_TEAM,
     on_status: callable = None,
     workspace: str = "",
 ) -> str:

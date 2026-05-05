@@ -3,7 +3,10 @@ from pathlib import Path
 import yaml
 
 from . import config
-from .models import CompanyState, Person, ProjectPlan, Skill, Task, Team
+from .models import (
+    CompanyState, Person, ProjectPlan, Requirement, RequirementTest,
+    Skill, Task, Team, RequirementTestSuite,
+)
 
 
 # ── Company state ──────────────────────────────────────────────────────────────
@@ -162,6 +165,8 @@ def create_project_dir(project_id: str, requirements_text: str) -> Path:
     (d / "decisions").mkdir(parents=True, exist_ok=True)
     (d / "outputs").mkdir(parents=True, exist_ok=True)
     (d / "sessions").mkdir(parents=True, exist_ok=True)
+    (d / "req_tests").mkdir(parents=True, exist_ok=True)
+    (d / "test_suites").mkdir(parents=True, exist_ok=True)
     (d / "requirements.md").write_text(requirements_text, encoding="utf-8")
     return d
 
@@ -260,6 +265,51 @@ def save_decision(project_id: str, task_id: str, record: dict) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# ── Requirements & test suites ─────────────────────────────────────────────────
+
+def save_requirements(project_id: str, requirements: list[Requirement]) -> None:
+    """Persist all Requirement objects for a project as a single YAML file."""
+    path = project_dir(project_id) / "req_tests" / "_requirements.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yaml.dump([r.to_dict() for r in requirements], f,
+                  default_flow_style=False, allow_unicode=True)
+
+
+def load_requirements(project_id: str) -> list[Requirement]:
+    """Load Requirement objects for a project. Returns [] if not yet created."""
+    path = project_dir(project_id) / "req_tests" / "_requirements.yaml"
+    if not path.exists():
+        return []
+    with path.open() as f:
+        data = yaml.safe_load(f) or []
+    return [Requirement.from_dict(r) for r in data]
+
+
+def save_test_suite(project_id: str, suite: RequirementTestSuite) -> None:
+    """Persist a RequirementTestSuite YAML under test_suites/<suite_id>.yaml."""
+    path = project_dir(project_id) / "test_suites" / f"{suite.id}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yaml.dump(suite.to_dict(), f, default_flow_style=False, allow_unicode=True)
+
+
+def load_test_suite(project_id: str, suite_id: str) -> RequirementTestSuite:
+    path = project_dir(project_id) / "test_suites" / f"{suite_id}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"RequirementTestSuite not found: {suite_id}")
+    with path.open() as f:
+        return RequirementTestSuite.from_dict(yaml.safe_load(f))
+
+
+def save_requirement_test(project_id: str, req_test: RequirementTest) -> None:
+    """Persist a RequirementTest record under req_tests/<id>.yaml."""
+    path = project_dir(project_id) / "req_tests" / f"{req_test.id}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yaml.dump(req_test.to_dict(), f, default_flow_style=False, allow_unicode=True)
 
 
 def list_projects() -> list:

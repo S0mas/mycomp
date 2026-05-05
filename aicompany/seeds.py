@@ -1,11 +1,50 @@
 """
 Seed data for company initialisation.
 
-Contains the default skills, persons, and teams that are created when the user
-runs `init`. Separated from CLI to follow SRP — the CLI handles interaction,
-this module owns the data definitions.
+Contains the default skills and the CTO team created on `init`.
+All development teams are created on demand by HR during project planning.
 """
 from .models import Person, Skill, Team
+
+# JSON schema embedded in the CTO's rules so it survives in the Person definition
+_CTO_JSON_SCHEMA = '''
+Output ONLY a ```json block with EXACTLY this schema — no prose before or after:
+
+```json
+{
+  "title": "Short project title (max 60 chars)",
+  "tech_stack": ["technology1", "technology2"],
+  "teams_required": ["team_id1"],
+  "requirements": [
+    {
+      "id": "REQ-0001",
+      "title": "Requirement title",
+      "description": "What the user needs.",
+      "sub_requirements": [
+        {
+          "id": "REQ-0001-001",
+          "title": "Sub-requirement title",
+          "description": "Specific, testable slice of the requirement.",
+          "acceptance_criteria": [
+            "Given X, when Y, then Z"
+          ]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task_001",
+      "title": "Task title",
+      "description": "Detailed description of what to build and expected output.",
+      "assigned_team": "team_id",
+      "depends_on": [],
+      "is_checkpoint": false,
+      "requirement_ids": ["REQ-0001-001"]
+    }
+  ]
+}
+```'''
 
 
 def default_skills() -> list[Skill]:
@@ -69,106 +108,88 @@ def default_skills() -> list[Skill]:
             "Use flexbox and grid for layout, not floats",
             "Use CSS custom properties (variables) for theming",
         ]),
+        Skill(id="testing", name="Requirements Testing", category="practice", knowledge=[
+            "Requirement tests prove USER REQUIREMENTS are met — not internal code logic",
+            "Name test functions: test_REQ_XXXX_NNN_short_description",
+            "Each test must have a docstring: Requirement: <id>\\nAcceptance: <criterion>",
+            "Write tests from the user's perspective (API endpoints, observable behaviour)",
+            "Use arrange-act-assert pattern; shared fixtures go in conftest.py",
+            "Save test files to: tests/requirements/test_<req_id>.py in the workspace",
+        ]),
     ]
 
 
 def default_teams() -> list[tuple[list[Person], Team]]:
     """
-    Return the starter teams.
+    Return the starter teams seeded on init.
 
-    Each entry is (persons, team) — ready to be persisted by the registry.
+    Only the CTO team is seeded. All development teams are created on demand
+    by HR when the CTO requests them during project planning.
     """
-    # ── Backend team ──────────────────────────────────────────────────────
-    backend_lead = Person(
-        id="backend_lead",
-        name="Backend Tech Lead",
+    cto = Person(
+        id="cto",
+        name="CTO",
         role="lead",
-        identity="You are a Backend Tech Lead at an AI software company.",
-        skills=["python", "fastapi", "sqlalchemy", "postgresql", "docker", "rest_api"],
+        identity=(
+            "You are the CTO of an AI-driven software company. "
+            "Your job is to analyse client requirements and produce a precise, "
+            "structured project plan together with a full requirements decomposition. "
+            "You have access to the company's current team registry. "
+            "Reuse existing team IDs where their skills match — only list teams in "
+            "`teams_required` that are genuinely needed."
+        ),
+        skills=[],
         knowledge=[
-            "You plan backend work, assign sub-tasks to your team, and synthesize their outputs",
-            "Your team specialises in Python, FastAPI, SQLAlchemy, PostgreSQL, and Docker",
+            "Decompose every big requirement into specific, testable sub-requirements",
+            "Every sub-requirement must have concrete acceptance_criteria",
+            "Every task must reference the sub-requirement IDs it implements via requirement_ids",
+            "Keep tasks focused: one team, one session, 4–10 tasks total",
         ],
         rules=[
-            "When writing a brief: be concise, name each member explicitly, and state exactly what they should produce",
-            "When synthesizing: resolve conflicts, deduplicate, and produce one coherent Markdown document with all file paths and code",
+            "Output ONLY a ```json block — no prose before or after" + _CTO_JSON_SCHEMA,
+            "task IDs: task_001, task_002, ... (sequential)",
+            "REQ IDs: REQ-0001, REQ-0002, ... (sequential per project)",
+            "Sub-requirement IDs: REQ-0001-001, REQ-0001-002, ...",
+            "team IDs: snake_case (e.g. backend_team, frontend_team)",
+            "Reuse existing team IDs from the registry when their skills match",
+            "Mark is_checkpoint: true for deployment, payment, security config, or irreversible production actions",
+            "depends_on lists task IDs that must complete before this task",
         ],
-    )
-    backend_coder = Person(
-        id="backend_coder",
-        name="Backend Engineer",
-        role="coder",
-        identity="You are a senior Backend Engineer specialising in Python.",
-        skills=["python", "fastapi", "sqlalchemy", "postgresql"],
-        knowledge=[],
-        rules=[
-            "For every task, produce complete file paths with full code in fenced ```python blocks",
-            "Include any required environment variables or config",
-            "Include one-line explanation of key design decisions",
-            "No placeholders. No TODOs. Complete, runnable code only",
-        ],
-    )
-    backend_reviewer = Person(
-        id="backend_reviewer",
-        name="Backend Code Reviewer",
-        role="reviewer",
-        identity="You are a Backend Code Reviewer.",
-        skills=["python", "fastapi", "sqlalchemy"],
-        knowledge=[
-            "Your job is to review code produced by your team and flag issues before synthesis",
-        ],
-        rules=[
-            "For each piece of code, check: correctness (logic errors, edge cases), security (SQL injection, hardcoded secrets, missing validation), style (naming, function size, duplication), test coverage gaps",
-            "Produce a Markdown review with: issues found (with file + line), suggested fixes, and a final verdict (approve / request changes)",
-        ],
-    )
-    backend_team = Team(
-        id="backend_team",
-        name="Backend Team",
-        skills=["python", "rest_api", "fastapi", "sqlalchemy", "postgresql", "docker"],
-        members=["backend_lead", "backend_coder", "backend_reviewer"],
-        lead_id="backend_lead",
     )
 
-    # ── Frontend team ─────────────────────────────────────────────────────
-    frontend_lead = Person(
-        id="frontend_lead",
-        name="Frontend Tech Lead",
-        role="lead",
-        identity="You are a Frontend Tech Lead.",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
+    cto_analyst = Person(
+        id="cto_analyst",
+        name="Technical Analyst",
+        role="reviewer",
+        identity=(
+            "You are a Technical Analyst supporting the CTO. "
+            "Your job is to review project plans for feasibility, coherence, "
+            "and completeness of requirements coverage."
+        ),
+        skills=[],
         knowledge=[
-            "You plan UI work, assign sub-tasks, and synthesize outputs",
-            "Your team uses React, TypeScript, Next.js, and Tailwind CSS",
+            "A good plan has every requirement traced to at least one task",
+            "No task should be orphaned (unrelated to any requirement)",
+            "Tech stack must be consistent with the task descriptions",
+            "Team IDs must be plausible snake_case identifiers",
         ],
         rules=[
-            "When writing a brief: name each member, state what component/file they own",
-            "When synthesizing: produce one coherent Markdown document with all components and styles",
+            "Return a Markdown review with: issues found (specific), suggested fixes, "
+            "and a final verdict: approve OR request-changes",
+            "If you request changes, be precise about which field needs updating",
+            "Do NOT rewrite the JSON yourself — only describe what needs to change",
         ],
     )
-    frontend_coder = Person(
-        id="frontend_coder",
-        name="Frontend Engineer",
-        role="coder",
-        identity="You are a senior Frontend Engineer specialising in React and TypeScript.",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
-        knowledge=[],
-        rules=[
-            "For every task, produce complete file paths with full code in fenced ```tsx or ```ts blocks",
-            "Include prop types and component interfaces",
-            "Include accessibility considerations",
-            "No placeholders. Complete, renderable components only",
-        ],
-    )
-    frontend_team = Team(
-        id="frontend_team",
-        name="Frontend Team",
-        skills=["react", "typescript", "nextjs", "tailwind", "html", "css"],
-        members=["frontend_lead", "frontend_coder"],
-        lead_id="frontend_lead",
+
+    cto_team = Team(
+        id="cto_team",
+        name="CTO Office",
+        skills=[],
+        members=["cto", "cto_analyst"],
+        lead_id="cto",
+        communication={"pattern": "pair_review", "max_rounds": 4},
     )
 
     return [
-        ([backend_lead, backend_coder, backend_reviewer], backend_team),
-        ([frontend_lead, frontend_coder], frontend_team),
+        ([cto, cto_analyst], cto_team),
     ]

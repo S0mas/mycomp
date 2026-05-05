@@ -24,7 +24,7 @@ def _call(system: str, user: str, max_tokens: int, backend: LLMBackend | None = 
     return b.call(system, user, max_tokens, config.MODEL)
 
 
-def _extract_json_block(text: str) -> dict:
+def extract_json_block(text: str) -> dict:
     # Try ```json ... ``` fence first
     match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
     if match:
@@ -35,25 +35,6 @@ def _extract_json_block(text: str) -> dict:
         return json.loads(match.group(1))
     # Last resort: parse whole text
     return json.loads(text)
-
-
-# ── CTO ────────────────────────────────────────────────────────────────────────
-
-
-def cto_analyze(requirements_text: str, company_state_yaml: str) -> dict:
-    user = f"""\
-## Client Requirements
-
-{requirements_text}
-
-## Current Company Registry (YAML)
-
-```yaml
-{company_state_yaml}
-```
-"""
-    text = _call(_load_prompt("cto_system"), user, config.MAX_TOKENS_CTO)
-    return _extract_json_block(text)
 
 
 # ── Requirements evaluation ───────────────────────────────────────────────────
@@ -74,7 +55,7 @@ def evaluate_requirements(requirements_text: str, company_state_yaml: str) -> di
 Evaluate these requirements. Be honest and constructive.
 """
     text = _call(_load_prompt("eval_system"), user, config.MAX_TOKENS_EVAL)
-    return _extract_json_block(text)
+    return extract_json_block(text)
 
 
 # ── Autofix ────────────────────────────────────────────────────────────────────
@@ -115,4 +96,4 @@ Create a team for a project requiring: **{skill_name}**
 Technology context: {tech_context}
 """
     text = _call(_load_prompt("hr_system"), user, config.MAX_TOKENS_HR)
-    return _extract_json_block(text)
+    return extract_json_block(text)

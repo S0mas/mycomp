@@ -4,12 +4,16 @@ Tests for aicompany/models.py
 What we verify:
   - Every dataclass can be constructed with minimal args
   - to_dict() / from_dict() round-trips produce equal objects
-  - Helper properties (skill_set, all_skills, task_by_id) work correctly
+  - Helper properties (skill_set, all_skills, task_by_id, sub_requirement_by_id) work correctly
   - Default values are sane (status='pending', tools=[], etc.)
   - build_prompt() composes structured context correctly
+  - SubRequirement, Requirement, RequirementTest, RequirementTestSuite round-trips
 """
 import pytest
-from aicompany.models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team, build_prompt
+from aicompany.models import (
+    CompanyState, Person, ProjectPlan, Requirement, RequirementTest,
+    RequirementsEvaluation, Skill, SubRequirement, Task, Team, RequirementTestSuite, build_prompt,
+)
 
 
 class TestSkill:
@@ -227,3 +231,140 @@ class TestRequirementsEvaluation:
         ev = RequirementsEvaluation.from_dict(d)
         assert ev.clarity == 4
         assert ev.risks == ["r"]
+
+
+# ── Requirements traceability models ──────────────────────────────────────────
+
+class TestSubRequirement:
+    def test_round_trip(self):
+        sub = SubRequirement(
+            id="REQ-0001-001", parent_id="REQ-0001",
+            title="User login", description="User can log in with email.",
+            acceptance_criteria=["POST /login returns 200"],
+        )
+        restored = SubRequirement.from_dict(sub.to_dict())
+        assert restored.id == sub.id
+        assert restored.parent_id == sub.parent_id
+        assert restored.acceptance_criteria == sub.acceptance_criteria
+
+    def test_defaults(self):
+        sub = SubRequirement.from_dict({
+            "id": "REQ-0001-001", "parent_id": "REQ-0001",
+            "title": "T", "description": "D",
+        })
+        assert sub.acceptance_criteria == []
+        assert sub.status == "pending"
+
+
+class TestRequirement:
+    def _make_req(self):
+        return {
+            "id": "REQ-0001",
+            "title": "Authentication",
+            "description": "Users must log in.",
+            "sub_requirements": [
+                {"id": "REQ-0001-001", "title": "Login", "description": "Login works.",
+                 "acceptance_criteria": ["POST /login returns 200"]},
+                {"id": "REQ-0001-002", "title": "Logout", "description": "Logout works.",
+                 "acceptance_criteria": []},
+            ],
+        }
+
+    def test_round_trip(self):
+        req = Requirement.from_dict(self._make_req())
+        restored = Requirement.from_dict(req.to_dict())
+        assert restored.id == "REQ-0001"
+        assert len(restored.sub_requirements) == 2
+        assert restored.sub_requirements[0].id == "REQ-0001-001"
+
+    def test_parent_id_injected(self):
+        req = Requirement.from_dict(self._make_req())
+        for sub in req.sub_requirements:
+            assert sub.parent_id == "REQ-0001"
+
+    def test_all_sub_ids(self):
+        req = Requirement.from_dict(self._make_req())
+        assert req.all_sub_ids() == ["REQ-0001-001", "REQ-0001-002"]
+
+    def test_defaults(self):
+        req = Requirement.from_dict({"id": "REQ-0001", "title": "T", "description": "D"})
+        assert req.sub_requirements == []
+        assert req.status == "pending"
+
+
+class TestRequirementTest:
+    def test_round_trip(self):
+        rt = RequirementTest(
+            id="TEST-0001-001", sub_req_id="REQ-0001-001",
+            title="Login test", test_file="tests/requirements/test_REQ_0001_001.py",
+        )
+        restored = RequirementTest.from_dict(rt.to_dict())
+        assert restored.id == rt.id
+        assert restored.test_file == rt.test_file
+
+    def test_defaults(self):
+        rt = RequirementTest.from_dict({
+            "id": "TEST-0001-001", "sub_req_id": "REQ-0001-001", "title": "T", "test_file": "f.py",
+        })
+        assert rt.status == "pending"
+
+
+class TestRequirementTestSuite:
+    def test_round_trip(self):
+        suite = RequirementTestSuite(
+            id="SUITE-0001", requirement_id="REQ-0001",
+            name="Auth Test Suite", test_ids=["TEST-0001-001", "TEST-0001-002"],
+        )
+        restored = RequirementTestSuite.from_dict(suite.to_dict())
+        assert restored.id == suite.id
+        assert restored.test_ids == suite.test_ids
+
+    def test_defaults(self):
+        suite = RequirementTestSuite.from_dict({
+            "id": "SUITE-0001", "requirement_id": "REQ-0001", "name": "S",
+        })
+        assert suite.test_ids == []
+        assert suite.status == "pending"
+
+
+class TestProjectPlanRequirements:
+    def test_requirements_round_trip(self):
+        req_data = {
+            "id": "REQ-0001", "title": "Auth", "description": "Login.",
+            "sub_requirements": [
+                {"id": "REQ-0001-001", "title": "Login", "description": "Can log in.",
+                 "acceptance_criteria": ["200 OK"]}
+            ],
+        }
+        plan = ProjectPlan(
+            project_id="p1", title="T",
+            requirements=[Requirement.from_dict(req_data)],
+        )
+        restored = ProjectPlan.from_dict(plan.to_dict())
+        assert len(restored.requirements) == 1
+        assert restored.requirements[0].id == "REQ-0001"
+
+    def test_sub_requirement_by_id(self):
+        req_data = {
+            "id": "REQ-0001", "title": "Auth", "description": ".",
+            "sub_requirements": [
+                {"id": "REQ-0001-001", "title": "Login", "description": ".",
+                 "acceptance_criteria": []},
+            ],
+        }
+        plan = ProjectPlan(
+            project_id="p1", title="T",
+            requirements=[Requirement.from_dict(req_data)],
+        )
+        sub = plan.sub_requirement_by_id("REQ-0001-001")
+        assert sub is not None
+        assert sub.title == "Login"
+        assert plan.sub_requirement_by_id("REQ-9999") is None
+
+    def test_task_requirement_ids_round_trip(self):
+        task = Task(
+            id="task_001", title="T", description="D",
+            assigned_team="backend_team", requirement_ids=["REQ-0001-001"],
+        )
+        restored = Task.from_dict(task.to_dict())
+        assert restored.requirement_ids == ["REQ-0001-001"]

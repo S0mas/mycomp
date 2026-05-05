@@ -2,20 +2,16 @@
 Tests for the JSON extraction logic in aicompany/llm.py
 
 What we verify:
-  - _extract_json_block handles ```json fences correctly
+  - extract_json_block handles ```json fences correctly
   - Falls back to bare ``` fences
   - Falls back to raw JSON (no fence)
   - Raises json.JSONDecodeError on invalid JSON
   - Works with real CTO-shaped and HR-shaped payloads
-
-We import _extract_json_block directly — it's a private helper but is the
-most failure-prone part of the LLM pipeline (malformed model output breaks
-the whole flow), so it deserves its own tests.
 """
 import json
 import pytest
 
-from aicompany.llm import _extract_json_block
+from aicompany.llm import extract_json_block as _extract_json_block
 
 
 VALID_PLAN = {

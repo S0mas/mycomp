@@ -2,17 +2,17 @@
 Tests for aicompany/cli.py  (Click commands)
 
 What we verify:
-  - `init` creates state.yaml and seeds two teams
+  - `init` creates state.yaml and seeds cto_team + skills
   - `init` is idempotent (second run warns, doesn't crash)
-  - `new-project` reads requirements, calls CTO + HR, saves plan
+  - `new-project` reads requirements, runs CTO team, calls HR, saves plan
   - `new-project` creates missing teams via HR agent
-  - `new-project` reuses existing teams (no HR call when skill already present)
+  - `new-project` reuses existing teams (no HR call when team already present)
   - `run` delegates to orchestrator.run_project
   - `run --dry-run` passes dry_run=True
   - `status` without args lists projects
   - `status <id>` shows task breakdown
 
-All LLM calls are mocked — no API key needed.
+All LLM/agent calls are mocked — no API key needed.
 """
 import json
 import pytest
@@ -31,6 +31,7 @@ MOCK_PLAN_RESPONSE = {
     "title": "Simple REST API",
     "tech_stack": ["python", "fastapi"],
     "teams_required": ["backend_team"],
+    "requirements": [],
     "tasks": [
         {
             "id": "task_001",
@@ -39,6 +40,7 @@ MOCK_PLAN_RESPONSE = {
             "assigned_team": "backend_team",
             "depends_on": [],
             "is_checkpoint": False,
+            "requirement_ids": [],
         }
     ],
 }
@@ -97,16 +99,14 @@ class TestInit:
         assert result.exit_code == 0
         assert config.STATE_FILE.exists()
 
-    def test_seeds_two_teams(self, runner):
+    def test_seeds_cto_team(self, runner):
         runner.invoke(cli, ["init"])
         state = registry.load_state()
-        assert "backend_team" in state.team_ids()
-        assert "frontend_team" in state.team_ids()
+        assert "cto_team" in state.team_ids()
 
-    def test_team_yaml_files_created(self, runner):
+    def test_team_yaml_file_created(self, runner):
         runner.invoke(cli, ["init"])
-        assert (config.TEAMS_DIR / "backend_team.yaml").exists()
-        assert (config.TEAMS_DIR / "frontend_team.yaml").exists()
+        assert (config.TEAMS_DIR / "cto_team.yaml").exists()
 
     def test_idempotent_second_run_warns(self, runner):
         runner.invoke(cli, ["init"])
@@ -125,11 +125,17 @@ MOCK_EVAL_RESPONSE = {
 
 class TestNewProject:
     def _run_new_project(self, runner, requirements_file, cto_response=None, hr_response=None):
+        """
+        Helper: run `init` then `new-project`, mocking CTO team planning and LLM calls.
+
+        CTO planning now goes through the Reasoner/Session infrastructure, so we mock
+        `_run_cto_planning` (the internal helper in workflow.py) instead of llm.cto_analyze.
+        """
         cto_resp = cto_response or MOCK_PLAN_RESPONSE
         runner.invoke(cli, ["init"])
 
-        with patch("aicompany.workflow.llm") as mock_llm:
-            mock_llm.cto_analyze.return_value = cto_resp
+        with patch("aicompany.workflow._run_cto_planning", return_value=cto_resp), \
+             patch("aicompany.workflow.llm") as mock_llm:
             mock_llm.hr_create_team.return_value = hr_response or MOCK_TEAM_RESPONSE
             mock_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
             result = runner.invoke(cli, ["new-project", requirements_file])
@@ -139,9 +145,14 @@ class TestNewProject:
         result, _ = self._run_new_project(runner, requirements_file)
         assert result.exit_code == 0, result.output
 
-    def test_calls_cto_analyze(self, runner, requirements_file):
-        _, mock_llm = self._run_new_project(runner, requirements_file)
-        mock_llm.cto_analyze.assert_called_once()
+    def test_cto_planning_runs(self, runner, requirements_file):
+        with patch("aicompany.workflow._run_cto_planning", return_value=MOCK_PLAN_RESPONSE) as mock_cto, \
+             patch("aicompany.workflow.llm") as mock_llm:
+            mock_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
+            mock_llm.hr_create_team.return_value = MOCK_TEAM_RESPONSE
+            runner.invoke(cli, ["init"])
+            runner.invoke(cli, ["new-project", requirements_file])
+        mock_cto.assert_called_once()
 
     def test_plan_file_created(self, runner, requirements_file):
         result, _ = self._run_new_project(runner, requirements_file)
@@ -157,14 +168,15 @@ class TestNewProject:
         assert plan.tasks[0].id == "task_001"
 
     def test_no_hr_call_when_team_exists(self, runner, requirements_file):
-        """backend_team is seeded by init — HR should not be called."""
-        _, mock_llm = self._run_new_project(runner, requirements_file)
+        """cto_team is seeded by init — if CTO requests it, HR should not be called."""
+        cto_using_seeded = {**MOCK_PLAN_RESPONSE, "teams_required": ["cto_team"]}
+        _, mock_llm = self._run_new_project(runner, requirements_file, cto_response=cto_using_seeded)
         mock_llm.hr_create_team.assert_not_called()
 
     def test_hr_called_for_missing_team(self, runner, requirements_file):
         plan_needing_devops = {
             **MOCK_PLAN_RESPONSE,
-            "teams_required": ["backend_team", "devops_team"],
+            "teams_required": ["cto_team", "devops_team"],
             "tasks": MOCK_PLAN_RESPONSE["tasks"] + [{
                 "id": "task_002",
                 "title": "Deploy",
@@ -172,6 +184,7 @@ class TestNewProject:
                 "assigned_team": "devops_team",
                 "depends_on": ["task_001"],
                 "is_checkpoint": True,
+                "requirement_ids": [],
             }],
         }
         _, mock_llm = self._run_new_project(runner, requirements_file, cto_response=plan_needing_devops)

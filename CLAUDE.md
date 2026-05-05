@@ -60,36 +60,43 @@ mycomp              shell entry-point wrapper — auto-creates .venv, then deleg
 .env.example        env var reference (copy to .env and fill in secrets)
 aicompany/          core package
   config.py         paths + env vars + backend selection
-  models.py         dataclasses (Skill, Person, Team, Task, ProjectPlan, CompanyState, RequirementsEvaluation, Message, Session, SessionRules) + build_prompt()
+  models.py         dataclasses: Skill, Person, Team, Task, ProjectPlan, CompanyState,
+                    SubRequirement, Requirement, RequirementTest, RequirementTestSuite,
+                    RequirementsEvaluation, Message, Session, SessionRules + build_prompt()
   llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain, with setup() + think())
   reasoner.py       LLMReasoner + create_reasoner() factory + build_system_prompt() / build_user_prompt() helpers
   backends/         provider implementations (anthropic, openai, fake, chat_session). chat_session_backend also contains ChatSessionReasoner
-  communication.py  Session management, message routing, communication patterns (lead_delegates, pair_review)
-  llm.py            stateless LLM calls via backend (CTO / HR / evaluation — NOT team execution). Loads prompts from prompts/
-  prompts/          system prompt templates (cto_system.txt, eval_system.txt, autofix_system.txt, hr_system.txt)
-  workflow.py       multi-step business logic (evaluate_and_gate, plan_and_create_project) — extracted from CLI
-  seeds.py          default skills, persons, and teams for init — pure data, no I/O
-  registry.py       all YAML file I/O (skills, persons, teams, plans, outputs). Note: save_* functions auto-register new IDs in state.yaml
-  orchestrator.py   execution loop + topological sort + session-based team coordination
+  communication.py  Session management, message routing, communication patterns:
+                    lead_delegates | pair_review | develop_test_review
+  llm.py            stateless LLM calls (evaluation, autofix, HR). Prompts from prompts/. extract_json_block() utility.
+  prompts/          eval_system.txt, autofix_system.txt, hr_system.txt
+  workflow.py       multi-step business logic: evaluate_and_gate, plan_and_create_project.
+                    CTO planning runs via the same Reasoner/Session infrastructure as all other agents.
+  seeds.py          CTO team (cto + cto_analyst) + shared skills (incl. testing). All dev teams created by HR on demand.
+  registry.py       all YAML file I/O. save_* auto-registers in state.yaml.
+                    Also: save/load requirements, RequirementTestSuites, RequirementTests.
+  orchestrator.py   execution loop + topological sort + requirement context injection
   oversight.py      human checkpoint (Approve/Reject/Modify)
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 213 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+tests/              pytest suite — 239 tests, all mocked (fake_mcp_server.py — MCP reference impl)
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
-  skills/           one YAML per shared skill (python, fastapi, etc.)
+  skills/           one YAML per shared skill
   persons/          one YAML per person (identity, skills refs, knowledge, rules)
-  teams/            one YAML per team (members, lead_id)
+  teams/            one YAML per team (members, lead_id, communication pattern)
 projects/           runtime project data — gitignored
   <project_id>/
-    plan.yaml         project plan + task statuses
-    requirements.md   original requirements text
-    src/              live source files written by agents during execution
-    outputs/          one .md per task — final agent output
-    sessions/         one .json per task — full message log (all agent exchanges)
-    decisions/        human checkpoint decisions
+    plan.yaml           project plan + task statuses + embedded requirements
+    requirements.md     original requirements text
+    src/                live source files written by agents via MCP
+    outputs/            one .md per task — final agent output
+    sessions/           one .json per task — full message log
+    decisions/          human checkpoint decisions
+    req_tests/          _requirements.yaml + TEST-XXXX-NNN.yaml records
+    test_suites/        SUITE-XXXX.yaml — groups RequirementTests per Requirement
 ```
 
 ---
@@ -148,7 +155,7 @@ All tests are fully isolated — `conftest.py` redirects all config paths to `tm
 4. **Respect module boundaries.**
    - `models.py` — pure data only. No I/O, no API calls, no imports from other aicompany modules.
    - `registry.py` — the ONLY module that reads/writes files. Note: save_* auto-registers in state.yaml.
-   - `llm.py` — the ONLY module that calls LLM backends. Never import a provider SDK here. Prompts live in `prompts/*.txt`.
+   - `llm.py` — stateless LLM calls for evaluation, autofix, HR. CTO planning uses the Reasoner/Session path, not llm.py. Prompts live in `prompts/*.txt`.
    - `llm_backend.py` — protocol definition only. No business logic.
    - `reasoner.py` — LLMReasoner + shared prompt-builder helpers. `ChatSessionReasoner` lives in `backends/chat_session_backend.py`. Uses LLMBackend, never concrete providers.
    - `backends/` — provider implementations. Each must call `register_backend()`.

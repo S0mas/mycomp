@@ -41,10 +41,9 @@ def _topological_sort(tasks: list) -> list:
     return result
 
 
-def _build_project_context(plan: ProjectPlan, completed_ids: set, workspace: str = "") -> str:
-    done_titles = [
-        t.title for t in plan.tasks if t.id in completed_ids
-    ]
+def _build_project_context(plan: ProjectPlan, completed_ids: set, workspace: str = "",
+                           task: Task | None = None) -> str:
+    done_titles = [t.title for t in plan.tasks if t.id in completed_ids]
     lines = [
         f"**Project**: {plan.title}",
         f"**Tech stack**: {', '.join(plan.tech_stack)}",
@@ -53,6 +52,22 @@ def _build_project_context(plan: ProjectPlan, completed_ids: set, workspace: str
         lines.append(f"**Completed tasks**: {', '.join(done_titles)}")
     if workspace:
         lines.append(f"**Workspace**: `{workspace}`")
+
+    # Append acceptance criteria for requirements this task must address
+    if task and task.requirement_ids and plan.requirements:
+        req_lines = ["\n## Requirements this task must implement"]
+        for sub_id in task.requirement_ids:
+            sub = plan.sub_requirement_by_id(sub_id)
+            if sub:
+                req_lines.append(f"\n### {sub.id} — {sub.title}")
+                req_lines.append(sub.description)
+                if sub.acceptance_criteria:
+                    req_lines.append("**Acceptance criteria:**")
+                    for ac in sub.acceptance_criteria:
+                        req_lines.append(f"- {ac}")
+        if len(req_lines) > 1:
+            lines.extend(req_lines)
+
     return "\n".join(lines)
 
 
@@ -152,7 +167,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
             session = create_session(task.id, [p.id for p in members], rules)
 
-            context = _build_project_context(plan, completed_ids, workspace)
+            context = _build_project_context(plan, completed_ids, workspace, task)
             reasoner = create_reasoner()
             reasoner.setup(members, skill_registry)
 

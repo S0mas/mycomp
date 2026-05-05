@@ -2,7 +2,6 @@ import uuid
 from pathlib import Path
 
 import click
-import yaml
 
 from . import config, orchestrator, registry
 from .models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team
@@ -111,12 +110,9 @@ def cmd_new_project(requirements_file: str):
 
     click.echo(f"\nAnalysing requirements: {req_path.name}")
 
-    state = registry.load_state()
-    state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
-
     # ── Evaluate requirements ─────────────────────────────────────────────────
     click.echo("  → Evaluating requirements quality...")
-    result = evaluate_and_gate(requirements_text, state_yaml)
+    result = evaluate_and_gate(requirements_text)
     _print_evaluation(result.evaluation)
 
     # ── Hard block on critical gaps ───────────────────────────────────────────
@@ -165,7 +161,7 @@ def cmd_new_project(requirements_file: str):
 
     # ── CTO planning + HR + project creation ──────────────────────────────────
     plan_result = plan_and_create_project(
-        requirements_text, state_yaml,
+        requirements_text,
         on_status=lambda msg: click.echo(f"  → {msg}"),
     )
 
