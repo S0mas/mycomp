@@ -229,3 +229,16 @@ class TestRunPattern:
         )
         assert output == "Mock output"
         assert session.status == "complete"
+
+
+class TestAgentRules:
+    def test_without_workspace_returns_rules_unchanged(self):
+        from aicompany.communication import _agent_rules
+        assert _agent_rules("some rules", "") == "some rules"
+
+    def test_with_workspace_appends_instructions(self):
+        from aicompany.communication import _agent_rules
+        result = _agent_rules("rules text", "projects/proj_abc/src")
+        assert "projects/proj_abc/src" in result
+        assert "write_file" in result
+        assert "rules text" in result

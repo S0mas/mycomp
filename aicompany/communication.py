@@ -32,6 +32,18 @@ def create_session(
 
 # ── Pattern: lead_delegates ───────────────────────────────────────────────────
 
+def _agent_rules(session_rules_text: str, workspace: str) -> str:
+    """Combine session communication rules with workspace file-writing instructions."""
+    if not workspace:
+        return session_rules_text
+    return session_rules_text + f"""
+
+## File output
+Workspace: `{workspace}`
+Write every implementation file using the write_file MCP tool.
+Read existing files with read_file. Run tests/commands with run_command."""
+
+
 def run_lead_delegates(
     session: Session,
     lead: Person,
@@ -43,6 +55,7 @@ def run_lead_delegates(
     skill_registry: dict | None = None,
     max_tokens: int = 4096,
     on_status: callable = None,
+    workspace: str = "",
 ) -> str:
     """
     Lead delegates pattern:
@@ -73,7 +86,7 @@ def run_lead_delegates(
     _status(f"{lead.name} (lead) writing brief...")
     lead_messages = session.messages_for(lead.id)
     brief = reasoner.think(lead, lead_messages, skill_registry,
-                           rules_text, max_tokens)
+                           _agent_rules(rules_text, workspace), max_tokens)
 
     brief_msg = Message(sender=lead.id, recipient="team", kind="brief",
                         content=brief)
@@ -91,7 +104,7 @@ def run_lead_delegates(
 
         person_messages = session.messages_for(person.id)
         output = reasoner.think(person, person_messages, skill_registry,
-                                person_rules_text, max_tokens)
+                                _agent_rules(person_rules_text, workspace), max_tokens)
 
         result_msg = Message(sender=person.id, recipient=lead.id,
                              kind="result", content=output)
@@ -111,7 +124,7 @@ def run_lead_delegates(
 
         synth_msgs = session.messages_for(lead.id)
         final = reasoner.think(lead, synth_msgs, skill_registry,
-                               rules_text, max_tokens)
+                               _agent_rules(rules_text, workspace), max_tokens)
     else:
         # Single-person team
         final = brief
@@ -137,6 +150,7 @@ def run_pair_review(
     skill_registry: dict | None = None,
     max_tokens: int = 4096,
     on_status: callable = None,
+    workspace: str = "",
 ) -> str:
     """
     Pair review pattern:
@@ -160,7 +174,8 @@ def run_pair_review(
     if not coder or not reviewer:
         return run_lead_delegates(session, lead, members, task_title,
                                   task_description, project_context,
-                                  reasoner, skill_registry, max_tokens, on_status)
+                                  reasoner, skill_registry, max_tokens, on_status,
+                                  workspace)
 
     # ── Brief ─────────────────────────────────────────────────────────────
     task_msg = Message(sender="orchestrator", recipient=lead.id, kind="task",
@@ -170,7 +185,7 @@ def run_pair_review(
 
     _status(f"{lead.name} (lead) writing brief...")
     brief = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, rules_text, max_tokens)
+                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
     session.add_message(Message(sender=lead.id, recipient="team",
                                 kind="brief", content=brief))
     session.advance_round()
@@ -179,7 +194,7 @@ def run_pair_review(
     coder_rules = session.rules.describe(coder.id, session.participants)
     _status(f"{coder.name} (coder) implementing...")
     code = reasoner.think(coder, session.messages_for(coder.id),
-                          skill_registry, coder_rules, max_tokens)
+                          skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
     session.add_message(Message(sender=coder.id, recipient=reviewer.id,
                                 kind="result", content=code))
     session.advance_round()
@@ -188,7 +203,7 @@ def run_pair_review(
     reviewer_rules = session.rules.describe(reviewer.id, session.participants)
     _status(f"{reviewer.name} (reviewer) reviewing...")
     review = reasoner.think(reviewer, session.messages_for(reviewer.id),
-                            skill_registry, reviewer_rules, max_tokens)
+                            skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
     session.add_message(Message(sender=reviewer.id, recipient=coder.id,
                                 kind="review", content=review))
 
@@ -198,7 +213,7 @@ def run_pair_review(
         # ── Coder revises ─────────────────────────────────────────────────
         _status(f"{coder.name} (coder) revising...")
         revised = reasoner.think(coder, session.messages_for(coder.id),
-                                 skill_registry, coder_rules, max_tokens)
+                                 skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
         session.add_message(Message(sender=coder.id, recipient=lead.id,
                                     kind="result", content=revised))
     else:
@@ -207,7 +222,7 @@ def run_pair_review(
     # ── Lead synthesizes ──────────────────────────────────────────────────
     _status(f"{lead.name} (lead) finalizing...")
     final = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, rules_text, max_tokens)
+                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
     session.add_message(Message(sender=lead.id, recipient="orchestrator",
                                 kind="result", content=final))
     session.complete()
@@ -235,11 +250,13 @@ def run_pattern(
     skill_registry: dict | None = None,
     max_tokens: int = 4096,
     on_status: callable = None,
+    workspace: str = "",
 ) -> str:
     """Run a named communication pattern. Falls back to lead_delegates."""
     fn = PATTERNS.get(pattern_name, run_lead_delegates)
     return fn(session, lead, members, task_title, task_description,
-              project_context, reasoner, skill_registry, max_tokens, on_status)
+              project_context, reasoner, skill_registry, max_tokens, on_status,
+              workspace)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

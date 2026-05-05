@@ -41,7 +41,7 @@ def _topological_sort(tasks: list) -> list:
     return result
 
 
-def _build_project_context(plan: ProjectPlan, completed_ids: set) -> str:
+def _build_project_context(plan: ProjectPlan, completed_ids: set, workspace: str = "") -> str:
     done_titles = [
         t.title for t in plan.tasks if t.id in completed_ids
     ]
@@ -51,6 +51,8 @@ def _build_project_context(plan: ProjectPlan, completed_ids: set) -> str:
     ]
     if done_titles:
         lines.append(f"**Completed tasks**: {', '.join(done_titles)}")
+    if workspace:
+        lines.append(f"**Workspace**: `{workspace}`")
     return "\n".join(lines)
 
 
@@ -70,8 +72,17 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
         print(f"Project {project_id} is already complete.")
         return
 
+    if not config.MCP_SERVERS and not dry_run:
+        raise RuntimeError(
+            "MCP server required for project execution. "
+            "Start one with ./scripts/start_mcp.sh and set AICOMPANY_MCP_SERVERS."
+        )
+
     plan.status = "running"
     registry.save_plan(plan)
+
+    workspace = f"projects/{project_id}/src"
+    (config.PROJECTS_DIR / project_id / "src").mkdir(parents=True, exist_ok=True)
 
     sorted_tasks = _topological_sort(plan.tasks)
     completed_ids = {t.id for t in plan.tasks if t.status == "done"}
@@ -141,7 +152,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
             session = create_session(task.id, [p.id for p in members], rules)
 
-            context = _build_project_context(plan, completed_ids)
+            context = _build_project_context(plan, completed_ids, workspace)
             reasoner = create_reasoner()
             reasoner.setup(members, skill_registry)
 
@@ -156,6 +167,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
                 reasoner=reasoner,
                 skill_registry=skill_registry,
                 on_status=lambda msg: print(f"    → {msg}"),
+                workspace=workspace,
             )
 
         except Exception as exc:

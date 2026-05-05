@@ -15,9 +15,10 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 - `AICOMPANY_LLM_BACKEND` — optional, defaults to `anthropic` (pluggable: any backend implementing `LLMBackend` protocol)
 - `AICOMPANY_MODEL` — optional, defaults to `claude-sonnet-4-6`
 - `ANTHROPIC_API_KEY` — required when using the `anthropic` backend
-- `AICOMPANY_MCP_SERVERS` — optional, JSON array of MCP server objects for the Anthropic backend (default: `[]`, MCP disabled)
+- `AICOMPANY_MCP_SERVERS` — **required for `run`**, JSON array of MCP server objects
   - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]`
   - Start the MCP server: `./scripts/start_mcp.sh` (starts server + cloudflare tunnel, prints public URL)
+  - See `docs/BACKENDS.md` for the required tool interface
 
 ---
 
@@ -76,7 +77,7 @@ aicompany/          core package
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 200 tests, all mocked
+tests/              pytest suite — 209 tests, all mocked
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
@@ -87,6 +88,7 @@ projects/           runtime project data — gitignored
   <project_id>/
     plan.yaml         project plan + task statuses
     requirements.md   original requirements text
+    src/              live source files written by agents during execution
     outputs/          one .md per task — final agent output
     sessions/         one .json per task — full message log (all agent exchanges)
     decisions/        human checkpoint decisions

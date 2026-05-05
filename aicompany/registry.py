@@ -188,6 +188,27 @@ def save_output(project_id: str, task_id: str, content: str) -> str:
     return str(path.relative_to(project_dir(project_id)))
 
 
+def materialize_files(text: str, workspace: Path) -> list[str]:
+    """Parse <write_file path="..."> blocks from agent output and write to workspace.
+
+    Returns list of relative paths written. Skips any path that would escape workspace.
+    """
+    import re
+    pattern = re.compile(
+        r'<write_file\s+path=["\']([^"\']+)["\']>(.*?)</write_file>',
+        re.DOTALL,
+    )
+    written = []
+    for rel_path, content in pattern.findall(text):
+        dest = (workspace / rel_path).resolve()
+        if not str(dest).startswith(str(workspace.resolve())):
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content.strip("\n"), encoding="utf-8")
+        written.append(rel_path)
+    return written
+
+
 def load_output(project_id: str, task_id: str) -> str | None:
     path = project_dir(project_id) / "outputs" / f"{task_id}.md"
     if path.exists():

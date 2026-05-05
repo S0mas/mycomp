@@ -175,6 +175,76 @@ AICOMPANY_LLM_BACKEND env var
 └─────────────────┘
 ```
 
+---
+
+## MCP Server (required for `run`)
+
+Project execution requires an MCP server. Agents use it to write files, read existing
+code, and run commands during task execution. Without it, `python main.py run` raises
+a `RuntimeError`.
+
+### Required tool interface
+
+Any server set in `AICOMPANY_MCP_SERVERS` **must** expose these four tools:
+
+| Tool | Signature | Behaviour |
+|---|---|---|
+| `write_file` | `(path: str, content: str) -> str` | Write content to path relative to workspace root. Creates parent dirs. Returns confirmation. |
+| `read_file` | `(path: str) -> str` | Read file at path. Returns content or error string. |
+| `list_directory` | `(path: str = ".") -> str` | List entries at path. Returns newline-separated names. |
+| `run_command` | `(command: str) -> str` | Run shell command. Returns combined stdout+stderr. |
+
+Optional tools (used when available):
+- `run_tests(pattern: str = "")` — run the project test suite
+- `get_project_status()` — git status + recent commits
+
+### Built-in server
+
+The repo ships `aicompany/mcp_server.py` with all required + optional tools,
+scoped to the project root with path-traversal protection.
+
+```bash
+# Start server + cloudflare quick tunnel (prints public URL)
+./scripts/start_mcp.sh
+
+# Then set:
+export AICOMPANY_MCP_SERVERS='[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]'
+```
+
+### Implementing a custom MCP server
+
+Any FastMCP-compatible server that exposes the four required tools will work.
+See `aicompany/backends/fake_mcp_server.py` for a minimal reference implementation
+(in-process, workspace-scoped, used in tests).
+
+```python
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+
+mcp = FastMCP(
+    "my-server",
+    host="127.0.0.1",
+    port=8000,
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
+
+@mcp.tool()
+def write_file(path: str, content: str) -> str: ...
+
+@mcp.tool()
+def read_file(path: str) -> str: ...
+
+@mcp.tool()
+def list_directory(path: str = ".") -> str: ...
+
+@mcp.tool()
+def run_command(command: str) -> str: ...
+
+mcp.run(transport="streamable-http")
+```
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |

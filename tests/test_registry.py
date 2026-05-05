@@ -253,3 +253,35 @@ class TestSessionPersistence:
         (config.PROJECTS_DIR / "proj_x").mkdir(parents=True, exist_ok=True)
         registry.save_session("proj_x", session)
         assert (config.PROJECTS_DIR / "proj_x" / "sessions" / "t1.json").exists()
+
+
+class TestMaterializeFiles:
+    def test_writes_file_from_tag(self, tmp_path):
+        text = '<write_file path="app/main.py">\nprint("hello")\n</write_file>'
+        written = registry.materialize_files(text, tmp_path)
+        assert written == ["app/main.py"]
+        assert (tmp_path / "app/main.py").read_text() == 'print("hello")'
+
+    def test_creates_parent_dirs(self, tmp_path):
+        text = '<write_file path="a/b/c.py">\nx = 1\n</write_file>'
+        registry.materialize_files(text, tmp_path)
+        assert (tmp_path / "a/b/c.py").exists()
+
+    def test_blocks_path_traversal(self, tmp_path):
+        text = '<write_file path="../evil.py">\nbad\n</write_file>'
+        written = registry.materialize_files(text, tmp_path)
+        assert written == []
+        assert not (tmp_path.parent / "evil.py").exists()
+
+    def test_returns_empty_for_no_tags(self, tmp_path):
+        assert registry.materialize_files("no tags here", tmp_path) == []
+
+    def test_multiple_files(self, tmp_path):
+        text = (
+            '<write_file path="a.py">\nx\n</write_file>\n'
+            '<write_file path="b.py">\ny\n</write_file>'
+        )
+        written = registry.materialize_files(text, tmp_path)
+        assert set(written) == {"a.py", "b.py"}
+        assert (tmp_path / "a.py").exists()
+        assert (tmp_path / "b.py").exists()
