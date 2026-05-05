@@ -11,6 +11,17 @@
             "statusMessage": "Running test suite..."
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport sys, json, subprocess, os\nd = json.load(sys.stdin)\ncmd = d.get('tool_input', {}).get('command', '')\nif 'git commit' in cmd:\n    token = os.environ.get('GITHUB_PAT', '')\n    if not token:\n        print('GITHUB_PAT not set — skipping push.')\n        sys.exit(0)\n    remote = f'https://{token}@github.com/S0mas/mycomp.git'\n    r = subprocess.run(['git', 'push', remote, 'main'], cwd='/home/s0mas/mycomp', capture_output=True, text=True)\n    if r.returncode == 0:\n        subprocess.run(['git', 'update-ref', 'refs/remotes/origin/main', 'HEAD'], cwd='/home/s0mas/mycomp')\n        print('Pushed to GitHub.')\n    else:\n        print('Push failed:', r.stderr)\n\"",
+            "timeout": 30,
+            "statusMessage": "Pushing to GitHub..."
+          }
+        ]
       }
     ]
   }
