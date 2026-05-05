@@ -18,6 +18,7 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 - `AICOMPANY_MCP_SERVERS` — **required for `run`**, JSON array of MCP server objects
   - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]`
   - Start the MCP server: `./scripts/start_mcp.sh` (starts server + cloudflare tunnel, prints public URL)
+  - Requires `cloudflared` binary in the project root — download from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
   - See `docs/BACKENDS.md` for the required tool interface
 
 ---
@@ -28,21 +29,15 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 # Run tests (no API key needed — all LLM calls mocked)
 .venv/bin/pytest tests/ -v
 
-# Bootstrap company (run once)
-.venv/bin/python main.py init
-
-# Start a project
-.venv/bin/python main.py new-project path/to/requirements.md
-
-# Preview execution plan (no LLM calls)
-.venv/bin/python main.py run --dry-run <project-id>
-
-# Run a project
-.venv/bin/python main.py run <project-id>
-
-# Check status
-.venv/bin/python main.py status
-.venv/bin/python main.py status <project-id>
+# The ./mycomp wrapper auto-creates .venv and installs deps on first run
+./mycomp init                                    # Bootstrap company (run once)
+./mycomp new-project path/to/requirements.md     # Evaluate + plan a project
+./mycomp run --dry-run <project-id>              # Preview tasks (no LLM calls)
+./mycomp run <project-id>                        # Execute project
+./mycomp status                                  # List all projects
+./mycomp status <project-id>                     # Task-level status
+./mycomp purge                                   # Delete company/ and projects/ (reset)
+./mycomp purge --all                             # Also delete .venv/ (full clean slate)
 ```
 
 ---
@@ -61,12 +56,14 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 ## Project Structure
 
 ```
+mycomp              shell entry-point wrapper — auto-creates .venv, then delegates to main.py
+.env.example        env var reference (copy to .env and fill in secrets)
 aicompany/          core package
   config.py         paths + env vars + backend selection
   models.py         dataclasses (Skill, Person, Team, Task, ProjectPlan, CompanyState, RequirementsEvaluation, Message, Session, SessionRules) + build_prompt()
   llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain, with setup() + think())
-  reasoner.py       LLMReasoner + ChatSessionReasoner + create_reasoner() factory
-  backends/         provider implementations (anthropic, openai, fake, chat_session)
+  reasoner.py       LLMReasoner + create_reasoner() factory + build_system_prompt() / build_user_prompt() helpers
+  backends/         provider implementations (anthropic, openai, fake, chat_session). chat_session_backend also contains ChatSessionReasoner
   communication.py  Session management, message routing, communication patterns (lead_delegates, pair_review)
   llm.py            stateless LLM calls via backend (CTO / HR / evaluation — NOT team execution). Loads prompts from prompts/
   prompts/          system prompt templates (cto_system.txt, eval_system.txt, autofix_system.txt, hr_system.txt)
@@ -78,7 +75,7 @@ aicompany/          core package
   validation.py     input validation (requirements, CTO plans, HR responses)
   cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 209 tests, all mocked
+tests/              pytest suite — 213 tests, all mocked (fake_mcp_server.py — MCP reference impl)
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
@@ -153,7 +150,7 @@ All tests are fully isolated — `conftest.py` redirects all config paths to `tm
    - `registry.py` — the ONLY module that reads/writes files. Note: save_* auto-registers in state.yaml.
    - `llm.py` — the ONLY module that calls LLM backends. Never import a provider SDK here. Prompts live in `prompts/*.txt`.
    - `llm_backend.py` — protocol definition only. No business logic.
-   - `reasoner.py` — Reasoner implementations (LLMReasoner, ChatSessionReasoner). Uses LLMBackend, never concrete providers.
+   - `reasoner.py` — LLMReasoner + shared prompt-builder helpers. `ChatSessionReasoner` lives in `backends/chat_session_backend.py`. Uses LLMBackend, never concrete providers.
    - `backends/` — provider implementations. Each must call `register_backend()`.
    - `workflow.py` — multi-step business logic. No UI/CLI code.
    - `seeds.py` — default data definitions. Pure data, no I/O.

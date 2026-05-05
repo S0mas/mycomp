@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .models import Message, Person
+    from .models import Message, Person, Skill
 
 
 @runtime_checkable
@@ -32,11 +32,15 @@ class Reasoner(Protocol):
     def setup(
         self,
         persons: list[Person],
-        skill_registry: dict | None = None,
+        skill_registry: "dict[str, Skill] | None" = None,
     ) -> None:
         """
         Prepare the reasoner for a session with the given persons.
-        Called once before think() calls begin. Default is a no-op.
+        Called once before think() calls begin.
+
+        Implementations may be a no-op (API-based) or may perform significant
+        setup such as creating per-person directories, writing persona files,
+        and printing tab instructions (chat-session mode).
         """
         ...
 
@@ -44,7 +48,7 @@ class Reasoner(Protocol):
         self,
         person: Person,
         messages: list[Message],
-        skill_registry: dict | None = None,
+        skill_registry: "dict[str, Skill] | None" = None,
         session_rules_text: str = "",
         max_tokens: int = 4096,
     ) -> str:

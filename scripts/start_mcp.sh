@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Start the mycomp MCP server and expose it via a cloudflare quick tunnel.
 #
+# Requires: cloudflared binary in the project root (https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+#
 # Usage:
 #   ./scripts/start_mcp.sh [--port 8000]
 #

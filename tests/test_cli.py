@@ -287,6 +287,43 @@ class TestStatus:
         assert "task_002" in result.output
         assert "CHECKPOINT" in result.output
 
+
+# ── purge ───────────────────────────────────────────────────────────────────────
+
+class TestPurge:
+    def test_purge_removes_company_and_projects(self, runner, sample_state, sample_plan):
+        write_state(sample_state)
+        write_plan(sample_plan)
+        assert config.COMPANY_DIR.exists()
+        assert config.PROJECTS_DIR.exists()
+
+        result = runner.invoke(cli, ["purge"], input="y\n")
+        assert result.exit_code == 0
+        assert not config.COMPANY_DIR.exists()
+        assert not config.PROJECTS_DIR.exists()
+
+    def test_purge_clean_state_reports_nothing_to_remove(self, runner):
+        # Remove dirs that isolated_fs creates so we hit the "already clean" path
+        import shutil
+        shutil.rmtree(config.COMPANY_DIR, ignore_errors=True)
+        shutil.rmtree(config.PROJECTS_DIR, ignore_errors=True)
+        result = runner.invoke(cli, ["purge"], input="y\n")
+        assert result.exit_code == 0
+        assert "Nothing to remove" in result.output
+
+    def test_purge_aborted_by_user_leaves_state_intact(self, runner, sample_state):
+        write_state(sample_state)
+        result = runner.invoke(cli, ["purge"], input="n\n")
+        assert result.exit_code != 0
+        assert config.COMPANY_DIR.exists()
+
+    def test_purge_all_also_removes_venv(self, runner):
+        venv = config.BASE_DIR / ".venv"
+        venv.mkdir(parents=True, exist_ok=True)
+        result = runner.invoke(cli, ["purge", "--all"], input="y\n")
+        assert result.exit_code == 0
+        assert not venv.exists()
+
     def test_shows_plan_status(self, runner, sample_plan):
         write_plan(sample_plan)
         result = runner.invoke(cli, ["status", sample_plan.project_id])

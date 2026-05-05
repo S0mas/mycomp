@@ -95,7 +95,7 @@ class Team:
         return {s.lower() for s in self.skills}
 
 
-def build_prompt(person: Person, skill_registry: dict | None = None) -> str:
+def build_prompt(person: Person, skill_registry: dict[str, Skill] | None = None) -> str:
     """Compose a system prompt from a person's structured context and their skills."""
     sections = [person.identity] if person.identity else []
 

@@ -214,8 +214,8 @@ export AICOMPANY_MCP_SERVERS='[{"type":"url","url":"https://<tunnel>.trycloudfla
 ### Implementing a custom MCP server
 
 Any FastMCP-compatible server that exposes the four required tools will work.
-See `aicompany/backends/fake_mcp_server.py` for a minimal reference implementation
-(in-process, workspace-scoped, used in tests).
+See `tests/fake_mcp_server.py` for a minimal reference implementation
+(in-process, workspace-scoped).
 
 ```python
 from mcp.server.fastmcp import FastMCP

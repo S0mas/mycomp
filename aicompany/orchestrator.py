@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from . import config, oversight, registry
 from .communication import create_session, run_pattern
-from .models import ProjectPlan, SessionRules, Task, build_prompt
+from .models import ProjectPlan, SessionRules, Task
 from .reasoner import create_reasoner
 
 

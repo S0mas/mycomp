@@ -17,7 +17,8 @@ from pathlib import Path
 
 from aicompany import config
 from aicompany.llm_backend import Reasoner, register_backend
-from aicompany.models import Message, Person, build_prompt
+from aicompany.models import Message, Person, Skill, build_prompt
+from aicompany.reasoner import build_system_prompt, build_user_prompt
 
 _POLL_INTERVAL = 1.0
 _TIMEOUT = int(os.environ.get("MYCOMP_CHAT_TIMEOUT", "600"))
@@ -92,12 +93,12 @@ class ChatSessionReasoner:
         self._root.mkdir(parents=True, exist_ok=True)
         self._prepared_persons: dict[str, Person] = {}
 
-    def setup(self, persons: list[Person], skill_registry: dict | None = None) -> None:
+    def setup(self, persons: list[Person], skill_registry: dict[str, Skill] | None = None) -> None:
         """Prepare per-person exchange dirs and print tab instructions."""
         self.prepare_all(persons, skill_registry)
         self.print_instructions()
 
-    def prepare_person(self, person: Person, skill_registry: dict | None = None) -> Path:
+    def prepare_person(self, person: Person, skill_registry: dict[str, Skill] | None = None) -> Path:
         """Create exchange dir, write persona card and worker.py for a person."""
         pdir = self._root / person.id
         pdir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +109,7 @@ class ChatSessionReasoner:
         self._prepared_persons[person.id] = person
         return pdir
 
-    def prepare_all(self, persons: list[Person], skill_registry: dict | None = None) -> None:
+    def prepare_all(self, persons: list[Person], skill_registry: dict[str, Skill] | None = None) -> None:
         """Prepare exchange dirs for all persons in a team."""
         for p in persons:
             self.prepare_person(p, skill_registry)
@@ -154,7 +155,7 @@ class ChatSessionReasoner:
         self,
         person: Person,
         messages: list[Message],
-        skill_registry: dict | None = None,
+        skill_registry: dict[str, Skill] | None = None,
         session_rules_text: str = "",
         max_tokens: int = 4096,
     ) -> str:
@@ -207,29 +208,13 @@ class ChatSessionReasoner:
             f"Ensure a chat AI is monitoring {pdir}"
         )
 
-    def _build_system(self, person, skill_registry, session_rules_text):
-        base = build_prompt(person, skill_registry)
-        if session_rules_text:
-            base += f"\n\n{session_rules_text}"
-        return base
+    def _build_system(self, person: Person, skill_registry: dict[str, Skill] | None, session_rules_text: str) -> str:
+        return build_system_prompt(person, skill_registry, session_rules_text)
 
-    def _build_user(self, person, messages):
-        if not messages:
-            return ""
-        parts = []
-        for msg in messages:
-            if msg.sender == "system":
-                parts.append(f"[SYSTEM] {msg.content}")
-            elif msg.sender == person.id:
-                parts.append(f"[YOU] {msg.content}")
-            else:
-                label = msg.sender
-                if msg.kind != "task":
-                    label = f"{msg.sender} ({msg.kind})"
-                parts.append(f"[{label}] {msg.content}")
-        return "\n\n---\n\n".join(parts)
+    def _build_user(self, person: Person, messages: list[Message]) -> str:
+        return build_user_prompt(person, messages)
 
-    def _build_persona_card(self, person, skill_registry):
+    def _build_persona_card(self, person: Person, skill_registry: dict[str, Skill] | None) -> str:
         """Build a Markdown persona card for the chat AI tab."""
         prompt = build_prompt(person, skill_registry)
         lines = [
@@ -251,7 +236,7 @@ class ChatSessionReasoner:
         ]
         return "\n".join(lines)
 
-    def _build_worker_script(self, person, pdir, skill_registry=None):
+    def _build_worker_script(self, person: Person, pdir: Path, skill_registry: dict[str, Skill] | None = None) -> str:
         """Build worker.py using the template file."""
         persona_card = self._build_persona_card(person, skill_registry)
         # Use .format() on the template

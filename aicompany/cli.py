@@ -8,7 +8,7 @@ from . import config, orchestrator, registry
 from .models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team
 from .seeds import default_skills, default_teams
 from .validation import ValidationError, validate_requirements_text, validate_cto_plan, validate_hr_response
-from .workflow import evaluate_and_gate, plan_and_create_project
+from .workflow import autofix_requirements, evaluate_and_gate, plan_and_create_project
 
 
 def _print_ok(msg: str) -> None:
@@ -145,7 +145,6 @@ def cmd_new_project(requirements_file: str):
             "Would you like AI to auto-fix the requirements?", fg="cyan"
         )):
             click.echo("  → Generating improved requirements...")
-            from .workflow import autofix_requirements
             fixed_text = autofix_requirements(
                 requirements_text, result.evaluation.to_dict(),
             )
@@ -204,7 +203,7 @@ def cmd_new_project(requirements_file: str):
 
 @click.command("run")
 @click.argument("project_id")
-@click.option("--dry-run", is_flag=True, help="Show what would execute without calling the LLM.")
+@click.option("--dry-run", is_flag=True, help="Print each task (id, title, team, deps) that would run — no LLM calls or file writes.")
 def cmd_run(project_id: str, dry_run: bool):
     """Execute a project's task plan (with human checkpoints)."""
     try:
@@ -253,11 +252,54 @@ def cmd_status(project_id: str | None):
         ))
 
 
+# ── purge ──────────────────────────────────────────────────────────────────────
+
+@click.command("purge")
+@click.option("--all", "purge_all", is_flag=True, help="Also remove .venv/ for a full clean slate.")
+@click.confirmation_option(prompt="This will delete all company state and projects. Continue?")
+def cmd_purge(purge_all: bool):
+    """Delete all runtime state (company/ and projects/). Does not touch .venv/ unless --all."""
+    import shutil
+
+    removed = []
+    for path in [config.COMPANY_DIR, config.PROJECTS_DIR]:
+        if path.exists():
+            shutil.rmtree(path)
+            removed.append(str(path.relative_to(config.BASE_DIR)))
+
+    venv = config.BASE_DIR / ".venv"
+    if purge_all and venv.exists():
+        shutil.rmtree(venv)
+        removed.append(".venv")
+
+    if removed:
+        for r in removed:
+            _print_ok(f"Removed: {r}/")
+    else:
+        _print_info("Nothing to remove — already clean.")
+
+    click.echo()
+    if purge_all:
+        _print_info("Run ./mycomp init to start fresh (will reinstall dependencies).")
+    else:
+        _print_info("Run ./mycomp init to reinitialise the company.")
+
+
 # ── root group ─────────────────────────────────────────────────────────────────
 
 @click.group()
 def cli():
-    """AI Company — an AI-driven end-to-end software development workflow."""
+    """AI Company — an AI-driven end-to-end software development workflow.
+
+    Typical flow:
+
+    \b
+      ./mycomp init                        Bootstrap company state (run once)
+      ./mycomp new-project <req.md>        Evaluate requirements, build teams, create plan
+      ./mycomp run <project-id>            Execute the plan (human checkpoints included)
+      ./mycomp status [project-id]         Check task progress
+      ./mycomp purge                       Reset all state and start over
+    """
     pass
 
 
@@ -265,3 +307,4 @@ cli.add_command(cmd_init, "init")
 cli.add_command(cmd_new_project, "new-project")
 cli.add_command(cmd_run, "run")
 cli.add_command(cmd_status, "status")
+cli.add_command(cmd_purge, "purge")
