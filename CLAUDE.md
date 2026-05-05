@@ -51,7 +51,8 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 
 - Branch: `main`
 - Remote: `https://github.com/S0mas/mycomp.git`
-- Push requires `GITHUB_PAT` env var (set in `.claude/settings.local.json`, never committed)
+- **Auto-push on every commit** — a `PostToolUse` hook in `.claude/settings.local.json` pushes to GitHub automatically after each `git commit`. No manual push needed.
+- Push uses `GITHUB_PAT` env var (set in `.claude/settings.local.json`, never committed)
 - **No co-author lines in commits** — user preference
 - Commit style: imperative subject line, blank line, then body explaining the why
 
