@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import time
 
+import httpx
+
 from . import config
 from .llm_backend import LLMBackend, Reasoner, create_backend
 from .models import Message, Person, Skill, build_prompt
@@ -71,8 +73,12 @@ class LLMReasoner:
         for attempt in range(config.LLM_RETRY_ATTEMPTS):
             try:
                 return self._backend.call(system, user, max_tokens, config.MODEL)
-            except Exception:
+            except Exception as exc:
                 if attempt == config.LLM_RETRY_ATTEMPTS - 1:
+                    raise
+                # Don't retry timeouts — they indicate the call ran too long,
+                # not a transient glitch. Retrying would multiply the wait time.
+                if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
                     raise
                 time.sleep(config.LLM_RETRY_BACKOFF_BASE ** attempt)
 

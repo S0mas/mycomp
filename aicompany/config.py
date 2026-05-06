@@ -26,3 +26,7 @@ MAX_TOKENS_AUTOFIX = 4096     # token budget for requirements autofix
 
 LLM_RETRY_ATTEMPTS: int = int(os.environ.get("AICOMPANY_LLM_RETRY_ATTEMPTS", "3"))
 LLM_RETRY_BACKOFF_BASE: float = float(os.environ.get("AICOMPANY_LLM_RETRY_BACKOFF_BASE", "2.0"))
+
+# Timeouts are defined in anthropic_backend.py and read from env there:
+#   AICOMPANY_API_TIMEOUT      — plain calls, default 120s
+#   AICOMPANY_API_TIMEOUT_MCP  — MCP calls (many tool round-trips), default 300s

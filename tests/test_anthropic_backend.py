@@ -45,6 +45,7 @@ class TestPlainCall:
             max_tokens=1024,
             system="sys",
             messages=[{"role": "user", "content": "user msg"}],
+            timeout=mock_client.messages.create.call_args.kwargs["timeout"],
         )
         mock_client.beta.messages.create.assert_not_called()
         assert result == "plain response"
@@ -79,6 +80,7 @@ class TestMCPCall:
             messages=[{"role": "user", "content": "user msg"}],
             mcp_servers=servers,
             betas=["mcp-client-2025-04-04"],
+            timeout=mock_client.beta.messages.create.call_args.kwargs["timeout"],
         )
         mock_client.messages.create.assert_not_called()
         assert result == "mcp response"

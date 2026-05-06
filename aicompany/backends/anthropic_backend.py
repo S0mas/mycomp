@@ -8,6 +8,11 @@ import anthropic
 from aicompany import config
 from aicompany.llm_backend import register_backend
 
+# Per-call timeout in seconds. MCP calls involve many tool round-trips so we
+# give them more time, but still cap to avoid silent 10-minute hangs.
+_TIMEOUT_PLAIN = int(os.environ.get("AICOMPANY_API_TIMEOUT", "120"))
+_TIMEOUT_MCP   = int(os.environ.get("AICOMPANY_API_TIMEOUT_MCP", "300"))
+
 
 class AnthropicBackend:
     """LLM backend using the Anthropic Messages API.
@@ -23,7 +28,7 @@ class AnthropicBackend:
                 "ANTHROPIC_API_KEY is not set. "
                 "Export it or add it to .env before using the Anthropic backend."
             )
-        self._client = anthropic.Anthropic()
+        self._client = anthropic.Anthropic(timeout=_TIMEOUT_MCP)
         self._mcp_servers: list[dict] = (
             mcp_servers if mcp_servers is not None else config.MCP_SERVERS
         )
@@ -37,6 +42,7 @@ class AnthropicBackend:
                 messages=[{"role": "user", "content": user}],
                 mcp_servers=self._mcp_servers,
                 betas=["mcp-client-2025-04-04"],
+                timeout=_TIMEOUT_MCP,
             )
             return "\n".join(b.text for b in response.content if hasattr(b, "text"))
         response = self._client.messages.create(
@@ -44,6 +50,7 @@ class AnthropicBackend:
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
+            timeout=_TIMEOUT_PLAIN,
         )
         return response.content[0].text
 

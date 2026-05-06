@@ -3,6 +3,8 @@ import re
 import time
 from pathlib import Path
 
+import httpx
+
 from . import config
 from .llm_backend import LLMBackend, create_backend
 
@@ -25,8 +27,10 @@ def _call(system: str, user: str, max_tokens: int, backend: LLMBackend | None = 
     for attempt in range(config.LLM_RETRY_ATTEMPTS):
         try:
             return b.call(system, user, max_tokens, config.MODEL)
-        except Exception:
+        except Exception as exc:
             if attempt == config.LLM_RETRY_ATTEMPTS - 1:
+                raise
+            if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
                 raise
             time.sleep(config.LLM_RETRY_BACKOFF_BASE ** attempt)
 
