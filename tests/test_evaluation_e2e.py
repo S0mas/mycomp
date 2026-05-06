@@ -129,10 +129,11 @@ class TestEvaluationGate:
     def test_good_requirements_proceed(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(GOOD_REQUIREMENTS)
-        with patch("aicompany.workflow._run_cto_planning", return_value=MOCK_CTO_RESPONSE), \
-             patch("aicompany.workflow.llm") as m:
-            m.evaluate_requirements.return_value = EVAL_PASS
-            m.hr_create_team.return_value = MOCK_TEAM_RESPONSE
+        with patch("aicompany.planning._run_cto_planning", return_value=MOCK_CTO_RESPONSE), \
+             patch("aicompany.evaluation.llm") as m_eval, \
+             patch("aicompany.planning.llm") as m_plan:
+            m_eval.evaluate_requirements.return_value = EVAL_PASS
+            m_plan.hr_create_team.return_value = MOCK_TEAM_RESPONSE
             result = runner.invoke(cli, ["new-project", path])
         assert result.exit_code == 0
         assert "passed evaluation" in result.output
@@ -140,8 +141,8 @@ class TestEvaluationGate:
     def test_mediocre_requirements_blocked(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(MEDIOCRE_REQUIREMENTS)
-        with patch("aicompany.workflow._run_cto_planning") as mock_cto, \
-             patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.planning._run_cto_planning") as mock_cto, \
+             patch("aicompany.evaluation.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert result.exit_code == 1
@@ -152,8 +153,8 @@ class TestEvaluationGate:
     def test_terrible_requirements_blocked_with_reject(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(BAD_REQUIREMENTS)
-        with patch("aicompany.workflow._run_cto_planning") as mock_cto, \
-             patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.planning._run_cto_planning") as mock_cto, \
+             patch("aicompany.evaluation.llm") as m:
             m.evaluate_requirements.return_value = EVAL_TERRIBLE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert result.exit_code == 1
@@ -165,24 +166,22 @@ class TestEvaluationGate:
         """Requirements too short — blocked before even calling the LLM."""
         runner.invoke(cli, ["init"])
         path = _write_requirements(TERRIBLE_REQUIREMENTS)
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.evaluation.llm") as m:
             result = runner.invoke(cli, ["new-project", path])
         assert result.exit_code == 1
         assert "too short" in result.output
-        # No LLM calls at all
         m.evaluate_requirements.assert_not_called()
 
     def test_autofix_generates_improved_file(self, runner):
         runner.invoke(cli, ["init"])
         path = _write_requirements(MEDIOCRE_REQUIREMENTS)
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.evaluation.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             m.autofix_requirements.return_value = GOOD_REQUIREMENTS
             result = runner.invoke(cli, ["new-project", path], input="y\n")
         assert result.exit_code == 1  # still blocked — user must re-run
         assert "Improved requirements saved" in result.output
         m.autofix_requirements.assert_called_once()
-        # Verify the fixed file exists
         import os
         fixed_path = path.replace(".md", "_fixed.md")
         assert os.path.exists(fixed_path)
@@ -193,7 +192,7 @@ class TestEvaluationGate:
         """Blocked output includes actionable fix hints."""
         runner.invoke(cli, ["init"])
         path = _write_requirements(BAD_REQUIREMENTS)
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.evaluation.llm") as m:
             m.evaluate_requirements.return_value = EVAL_MEDIOCRE
             result = runner.invoke(cli, ["new-project", path], input="n\n")
         assert "acceptance criteria" in result.output.lower() or "Add missing sections" in result.output

@@ -1,13 +1,13 @@
-import uuid
 from pathlib import Path
 
 import click
 
 from . import config, orchestrator, registry
-from .models import CompanyState, Person, ProjectPlan, RequirementsEvaluation, Skill, Task, Team
+from .models import CompanyState, Person, RequirementsEvaluation, Skill, Team
 from .seeds import default_skills, default_teams
-from .validation import ValidationError, validate_requirements_text, validate_cto_plan, validate_hr_response
-from .workflow import autofix_requirements, evaluate_and_gate, plan_and_create_project
+from .validation import validate_requirements_text
+from .evaluation import autofix_requirements, evaluate_and_gate
+from .planning import plan_and_create_project
 
 
 def _print_ok(msg: str) -> None:

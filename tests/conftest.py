@@ -9,7 +9,7 @@ import yaml
 from pathlib import Path
 
 import aicompany.config as config
-from aicompany.models import CompanyState, Person, ProjectPlan, Skill, Task, Team
+from aicompany.models import CompanyState, Person, Plan, ProjectPlan, Skill, Task, TaskInput, Team
 
 
 # ── Filesystem isolation ───────────────────────────────────────────────────────
@@ -38,6 +38,24 @@ def isolated_fs(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJECTS_DIR", projects_dir)
 
     return tmp_path
+
+
+# ── Test helpers ───────────────────────────────────────────────────────────────
+
+def make_task_input(spec: str = "Do something", context: str = "") -> TaskInput:
+    """Minimal TaskInput for use in tests."""
+    return TaskInput(specification=spec, context=context)
+
+
+def make_leaf_plan(title: str = "", spec: str = "") -> Plan:
+    """Minimal leaf Plan (no subtasks) for use in tests."""
+    return Plan(
+        project_id="",
+        title=title or "leaf plan",
+        input=TaskInput(specification=spec),
+        requirements=[],
+        tasks=[],
+    )
 
 
 # ── Reusable model factories ───────────────────────────────────────────────────
@@ -94,24 +112,27 @@ def sample_tasks() -> list:
         Task(
             id="task_001",
             title="Design schema",
-            description="Create the DB schema",
+            input=make_task_input("Create the DB schema"),
             assigned_team="backend_engineer",
+            plan=make_leaf_plan("Design schema", "Create the DB schema"),
             depends_on=[],
             is_checkpoint=False,
         ),
         Task(
             id="task_002",
             title="Implement API",
-            description="Build REST endpoints",
+            input=make_task_input("Build REST endpoints"),
             assigned_team="backend_engineer",
+            plan=make_leaf_plan("Implement API", "Build REST endpoints"),
             depends_on=["task_001"],
             is_checkpoint=True,
         ),
         Task(
             id="task_003",
             title="Write tests",
-            description="Unit tests for the API",
+            input=make_task_input("Unit tests for the API"),
             assigned_team="backend_engineer",
+            plan=make_leaf_plan("Write tests", "Unit tests for the API"),
             depends_on=["task_002"],
             is_checkpoint=False,
         ),
@@ -119,10 +140,11 @@ def sample_tasks() -> list:
 
 
 @pytest.fixture
-def sample_plan(sample_tasks) -> ProjectPlan:
-    return ProjectPlan(
+def sample_plan(sample_tasks) -> Plan:
+    return Plan(
         project_id="proj_test01",
         title="Test Project",
+        input=TaskInput(specification="# Test requirements"),
         tech_stack=["python", "fastapi"],
         teams_required=["backend_engineer"],
         tasks=sample_tasks,
@@ -164,8 +186,8 @@ def write_skills(skills: list) -> None:
             yaml.dump(s.to_dict(), f, default_flow_style=False)
 
 
-def write_plan(plan: ProjectPlan) -> None:
-    """Write a ProjectPlan to the (patched) PROJECTS_DIR."""
+def write_plan(plan: Plan) -> None:
+    """Write a Plan to the (patched) PROJECTS_DIR."""
     proj_dir = config.PROJECTS_DIR / plan.project_id
     (proj_dir / "decisions").mkdir(parents=True, exist_ok=True)
     (proj_dir / "outputs").mkdir(parents=True, exist_ok=True)

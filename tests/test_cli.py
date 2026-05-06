@@ -128,28 +128,30 @@ class TestNewProject:
         """
         Helper: run `init` then `new-project`, mocking CTO team planning and LLM calls.
 
-        CTO planning now goes through the Reasoner/Session infrastructure, so we mock
-        `_run_cto_planning` (the internal helper in workflow.py) instead of llm.cto_analyze.
+        evaluate_and_gate lives in evaluation.py; plan_and_create_project in planning.py.
+        Each module has its own llm import, so we patch both.
         """
         cto_resp = cto_response or MOCK_PLAN_RESPONSE
         runner.invoke(cli, ["init"])
 
-        with patch("aicompany.workflow._run_cto_planning", return_value=cto_resp), \
-             patch("aicompany.workflow.llm") as mock_llm:
-            mock_llm.hr_create_team.return_value = hr_response or MOCK_TEAM_RESPONSE
-            mock_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
+        with patch("aicompany.planning._run_cto_planning", return_value=cto_resp), \
+             patch("aicompany.evaluation.llm") as mock_eval_llm, \
+             patch("aicompany.planning.llm") as mock_plan_llm:
+            mock_eval_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
+            mock_plan_llm.hr_create_team.return_value = hr_response or MOCK_TEAM_RESPONSE
             result = runner.invoke(cli, ["new-project", requirements_file])
-        return result, mock_llm
+        return result, mock_plan_llm
 
     def test_exits_zero(self, runner, requirements_file):
         result, _ = self._run_new_project(runner, requirements_file)
         assert result.exit_code == 0, result.output
 
     def test_cto_planning_runs(self, runner, requirements_file):
-        with patch("aicompany.workflow._run_cto_planning", return_value=MOCK_PLAN_RESPONSE) as mock_cto, \
-             patch("aicompany.workflow.llm") as mock_llm:
-            mock_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
-            mock_llm.hr_create_team.return_value = MOCK_TEAM_RESPONSE
+        with patch("aicompany.planning._run_cto_planning", return_value=MOCK_PLAN_RESPONSE) as mock_cto, \
+             patch("aicompany.evaluation.llm") as mock_eval_llm, \
+             patch("aicompany.planning.llm") as mock_plan_llm:
+            mock_eval_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
+            mock_plan_llm.hr_create_team.return_value = MOCK_TEAM_RESPONSE
             runner.invoke(cli, ["init"])
             runner.invoke(cli, ["new-project", requirements_file])
         mock_cto.assert_called_once()
@@ -206,7 +208,7 @@ class TestNewProject:
     def test_hard_block_on_low_overall_score(self, runner, requirements_file):
         low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 1, "completeness": 1, "feasibility": 1, "verdict": "reject"}
         runner.invoke(cli, ["init"])
-        with patch("aicompany.workflow.llm") as mock_llm:
+        with patch("aicompany.evaluation.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = low_eval
             result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
         assert result.exit_code == 1
@@ -215,7 +217,7 @@ class TestNewProject:
     def test_hard_block_on_single_low_dimension(self, runner, requirements_file):
         low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 2}
         runner.invoke(cli, ["init"])
-        with patch("aicompany.workflow.llm") as mock_llm:
+        with patch("aicompany.evaluation.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = low_eval
             result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
         assert result.exit_code == 1
@@ -224,7 +226,7 @@ class TestNewProject:
     def test_hard_block_on_reject_verdict(self, runner, requirements_file):
         reject_eval = {**MOCK_EVAL_RESPONSE, "verdict": "reject"}
         runner.invoke(cli, ["init"])
-        with patch("aicompany.workflow.llm") as mock_llm:
+        with patch("aicompany.evaluation.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = reject_eval
             result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
         assert result.exit_code == 1
@@ -233,7 +235,7 @@ class TestNewProject:
     def test_autofix_saves_fixed_file(self, runner, requirements_file):
         low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 2, "verdict": "needs_work"}
         runner.invoke(cli, ["init"])
-        with patch("aicompany.workflow.llm") as mock_llm:
+        with patch("aicompany.evaluation.llm") as mock_llm:
             mock_llm.evaluate_requirements.return_value = low_eval
             mock_llm.autofix_requirements.return_value = "# Improved Requirements\n\nBuild a REST API."
             result = runner.invoke(cli, ["new-project", requirements_file], input="y\n")

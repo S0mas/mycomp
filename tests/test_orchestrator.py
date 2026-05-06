@@ -19,7 +19,8 @@ from unittest.mock import MagicMock, patch, call
 
 import aicompany.config as config
 from aicompany import orchestrator, registry
-from aicompany.models import Task, Person, ProjectPlan, Team
+from aicompany.models import Plan, Task, TaskInput, Person, ProjectPlan, Team
+from tests.conftest import make_leaf_plan, make_task_input
 from aicompany.orchestrator import OrchestratorError, _topological_sort
 from tests.conftest import write_plan, write_state, write_team, write_persons, write_skills
 
@@ -35,33 +36,36 @@ class TestTopologicalSort:
 
     def test_no_deps(self):
         tasks = [
-            Task(id="a", title="A", description="", assigned_team="eng"),
-            Task(id="b", title="B", description="", assigned_team="eng"),
+            Task(id="a", title="A", input=make_task_input(), assigned_team="eng", plan=make_leaf_plan()),
+            Task(id="b", title="B", input=make_task_input(), assigned_team="eng", plan=make_leaf_plan()),
         ]
         ordered = _topological_sort(tasks)
         assert {t.id for t in ordered} == {"a", "b"}
 
     def test_unknown_dep_raises(self):
         tasks = [
-            Task(id="a", title="A", description="", assigned_team="eng", depends_on=["ghost"]),
+            Task(id="a", title="A", input=make_task_input(), assigned_team="eng",
+                 plan=make_leaf_plan(), depends_on=["ghost"]),
         ]
         with pytest.raises(OrchestratorError, match="unknown task"):
             _topological_sort(tasks)
 
     def test_cycle_raises(self):
         tasks = [
-            Task(id="a", title="A", description="", assigned_team="eng", depends_on=["b"]),
-            Task(id="b", title="B", description="", assigned_team="eng", depends_on=["a"]),
+            Task(id="a", title="A", input=make_task_input(), assigned_team="eng",
+                 plan=make_leaf_plan(), depends_on=["b"]),
+            Task(id="b", title="B", input=make_task_input(), assigned_team="eng",
+                 plan=make_leaf_plan(), depends_on=["a"]),
         ]
         with pytest.raises(OrchestratorError, match="Cycle"):
             _topological_sort(tasks)
 
     def test_diamond_dependency(self):
         tasks = [
-            Task(id="root", title="Root", description="", assigned_team="eng"),
-            Task(id="left", title="Left", description="", assigned_team="eng", depends_on=["root"]),
-            Task(id="right", title="Right", description="", assigned_team="eng", depends_on=["root"]),
-            Task(id="tip", title="Tip", description="", assigned_team="eng", depends_on=["left", "right"]),
+            Task(id="root",  title="Root",  input=make_task_input(), assigned_team="eng", plan=make_leaf_plan()),
+            Task(id="left",  title="Left",  input=make_task_input(), assigned_team="eng", plan=make_leaf_plan(), depends_on=["root"]),
+            Task(id="right", title="Right", input=make_task_input(), assigned_team="eng", plan=make_leaf_plan(), depends_on=["root"]),
+            Task(id="tip",   title="Tip",   input=make_task_input(), assigned_team="eng", plan=make_leaf_plan(), depends_on=["left", "right"]),
         ]
         ordered = _topological_sort(tasks)
         ids = [t.id for t in ordered]

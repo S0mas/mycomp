@@ -60,27 +60,36 @@ mycomp              shell entry-point wrapper — auto-creates .venv, then deleg
 .env.example        env var reference (copy to .env and fill in secrets)
 aicompany/          core package
   config.py         paths + env vars + backend selection
-  models.py         dataclasses: Skill, Person, Team, Task, ProjectPlan, CompanyState,
-                    SubRequirement, Requirement, RequirementTest, RequirementTestSuite,
-                    RequirementsEvaluation, Message, Session, SessionRules + build_prompt()
+  models/           data models — split by domain (all re-exported from models/__init__.py):
+    org.py          Skill, Person, Team, CompanyState, build_prompt
+    project.py      TaskInput(specification, context), Task, Plan (alias: ProjectPlan), MAX_PLAN_DEPTH
+                    TaskInput.specification is validated; context is parent background (never validated).
+                    Task.plan: Plan is ALWAYS present (never None); Plan.has_subtasks=False → leaf,
+                    True → composite; to_dict/from_dict depth-bounded at MAX_PLAN_DEPTH=20
+    requirements.py SubRequirement, Requirement, RequirementTest, RequirementTestSuite, RequirementsEvaluation
+    session.py      Message, SessionRules, Session
   llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain, with setup() + think())
   reasoner.py       LLMReasoner + create_reasoner() factory + build_system_prompt() / build_user_prompt() helpers
   backends/         provider implementations (anthropic, openai, fake, chat_session). chat_session_backend also contains ChatSessionReasoner
-  communication.py  Session management, message routing, communication patterns:
-                    lead_delegates | pair_review | develop_test_review
+  communication.py  create_session, run_pattern (dispatches to patterns.py). Re-exports pattern functions.
+  patterns.py       Pattern implementations: run_lead_delegates, run_pair_review, run_develop_test_review.
+                    _members_by_role helper. _agent_rules session+workspace rule builder.
   llm.py            stateless LLM calls (evaluation, autofix, HR). Prompts from prompts/. extract_json_block() utility.
-  prompts/          eval_system.txt, autofix_system.txt, hr_system.txt
-  workflow.py       multi-step business logic: evaluate_and_gate, plan_and_create_project.
-                    CTO planning runs via the same Reasoner/Session infrastructure as all other agents.
+  prompts/          eval_system.txt, autofix_system.txt, cto_system.txt, hr_system.txt
+  evaluation.py     Requirements quality gate: EvaluationResult, evaluate_and_gate, autofix_requirements
+  planning.py       CTO planning + HR team creation + project assembly: PlanResult, plan_and_create_project
+                    Helpers: _run_cto_planning, _create_missing_teams, _update_technologies, _assemble_project
   seeds.py          CTO team (cto + cto_analyst) + shared skills (incl. testing). All dev teams created by HR on demand.
-  registry.py       all YAML file I/O. save_* auto-registers in state.yaml.
+  registry.py       all YAML file I/O. _load_yaml/_save_yaml helpers. save_* auto-registers in state.yaml.
                     Also: save/load requirements, RequirementTestSuites, RequirementTests.
-  orchestrator.py   execution loop + topological sort + requirement context injection
-  oversight.py      human checkpoint (Approve/Reject/Modify)
-  validation.py     input validation (requirements, CTO plans, HR responses)
-  cli.py            Click commands — thin UI layer, delegates to workflow.py and orchestrator.py
+  orchestrator.py   execution loop + topological sort. _handle_checkpoint, _execute_task, _build_project_context
+  oversight.py      human checkpoint UI: _display_task, _prompt_decision, checkpoint()
+  validation.py     input validation: validate_requirements_text (delegates to TaskInput.validate()),
+                    validate_cto_plan (decomposed into _validate_plan_structure, _validate_tasks,
+                    _validate_task_dependencies), validate_hr_response
+  cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 239 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+tests/              pytest suite — 255 tests, all mocked (fake_mcp_server.py — MCP reference impl)
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
@@ -119,9 +128,9 @@ projects/           runtime project data — gitignored
 - Models are pure data — no I/O or API calls in `models.py`
 - `registry.py` is the only module that reads/writes files (save_* auto-registers new IDs in state.yaml)
 - `llm.py` is the only module that calls LLM backends (via the `LLMBackend` protocol). Prompts live in `prompts/` as text files
-- `workflow.py` owns multi-step business logic (evaluation gate, CTO planning, HR team creation)
+- `evaluation.py` owns the requirements quality gate; `planning.py` owns CTO planning, HR team creation, project assembly
 - `seeds.py` owns default data definitions — pure data, no I/O
-- `cli.py` is a thin UI layer — delegates to `workflow.py` and `orchestrator.py`
+- `cli.py` is a thin UI layer — delegates to `evaluation.py`, `planning.py`, and `orchestrator.py`
 - No hardcoded provider imports outside `backends/`
 - No new dependencies without updating `requirements.txt` and `system-deps.txt`
 - When adding a new module, add corresponding tests in `tests/`
@@ -153,16 +162,19 @@ All tests are fully isolated — `conftest.py` redirects all config paths to `tm
 ### While Making Changes
 
 4. **Respect module boundaries.**
-   - `models.py` — pure data only. No I/O, no API calls, no imports from other aicompany modules.
+   - `models/` — pure data only. No I/O, no API calls, no imports from other aicompany modules (except within the package itself).
    - `registry.py` — the ONLY module that reads/writes files. Note: save_* auto-registers in state.yaml.
-   - `llm.py` — stateless LLM calls for evaluation, autofix, HR. CTO planning uses the Reasoner/Session path, not llm.py. Prompts live in `prompts/*.txt`.
+   - `llm.py` — stateless LLM calls. Prompts live in `prompts/*.txt`.
    - `llm_backend.py` — protocol definition only. No business logic.
    - `reasoner.py` — LLMReasoner + shared prompt-builder helpers. `ChatSessionReasoner` lives in `backends/chat_session_backend.py`. Uses LLMBackend, never concrete providers.
    - `backends/` — provider implementations. Each must call `register_backend()`.
-   - `workflow.py` — multi-step business logic. No UI/CLI code.
+   - `evaluation.py` — requirements quality gate only. No team/project creation.
+   - `planning.py` — CTO planning, HR team creation, project assembly. No UI/CLI code.
+   - `patterns.py` — communication pattern implementations. No direct LLM or file I/O.
+   - `communication.py` — session creation and pattern dispatch only.
    - `seeds.py` — default data definitions. Pure data, no I/O.
    - `validation.py` — pure validation logic. No I/O, no LLM calls.
-   - `cli.py` — user-facing commands. Thin UI layer — delegates to workflow.py and orchestrator.py.
+   - `cli.py` — user-facing commands. Thin UI layer — delegates to evaluation.py, planning.py, orchestrator.py.
 
 5. **Write tests for every change.** No PR/commit without corresponding test updates.
    - New function → new test

@@ -10,7 +10,7 @@ except ImportError:
 
 try:
     from . import openai_backend  # noqa: F401
-except Exception:
+except ImportError:
     pass
 
 from . import fake_backend  # noqa: F401  — always available, no dependencies

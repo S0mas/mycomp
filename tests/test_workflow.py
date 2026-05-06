@@ -1,10 +1,11 @@
-"""Tests for aicompany/workflow.py"""
+"""Tests for aicompany/evaluation.py and aicompany/planning.py"""
 import json
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from aicompany.workflow import evaluate_and_gate, plan_and_create_project, EvaluationResult
+from aicompany.evaluation import evaluate_and_gate, EvaluationResult
+from aicompany.planning import plan_and_create_project
 from aicompany import config, registry
 from aicompany.models import CompanyState
 from tests.conftest import write_state, write_team, write_persons
@@ -38,7 +39,7 @@ class TestEvaluateAndGate:
 
     def _gate(self, requirements_text, eval_response):
         registry.save_state(CompanyState())
-        with patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.evaluation.llm") as m:
             m.evaluate_requirements.return_value = eval_response
             return evaluate_and_gate(requirements_text)
 
@@ -79,8 +80,8 @@ class TestPlanAndCreateProject:
             "persons": [{"id": "be_lead", "name": "Lead", "role": "lead", "identity": "You lead.", "skills": [], "knowledge": [], "rules": [], "tools": []}],
             "skills": [],
         }
-        with patch("aicompany.workflow._run_cto_planning", return_value=cto_resp), \
-             patch("aicompany.workflow.llm") as m:
+        with patch("aicompany.planning._run_cto_planning", return_value=cto_resp), \
+             patch("aicompany.planning.llm") as m:
             m.hr_create_team.return_value = hr_resp
             kwargs = {}
             if on_status is not None:
@@ -107,7 +108,6 @@ class TestPlanAndCreateProject:
 
     def test_status_callback_called(self):
         statuses = []
-        # Request a team that doesn't exist so HR fires and _status is called
         cto_needing_new = {**MOCK_CTO, "teams_required": ["new_team"]}
         self._plan(cto_response=cto_needing_new, on_status=statuses.append)
         assert any("new_team" in s for s in statuses)

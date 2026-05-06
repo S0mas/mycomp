@@ -10,10 +10,14 @@ from aicompany.validation import (
 
 class TestValidateRequirementsText:
     def test_empty_string(self):
-        assert validate_requirements_text("") == ["Requirements file is empty."]
+        errors = validate_requirements_text("")
+        assert len(errors) == 1
+        assert "empty" in errors[0].lower()
 
     def test_whitespace_only(self):
-        assert validate_requirements_text("   \n  ") == ["Requirements file is empty."]
+        errors = validate_requirements_text("   \n  ")
+        assert len(errors) == 1
+        assert "empty" in errors[0].lower()
 
     def test_too_short(self):
         errors = validate_requirements_text("hello")

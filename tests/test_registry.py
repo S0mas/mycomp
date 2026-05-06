@@ -18,7 +18,8 @@ import yaml
 
 import aicompany.config as config
 from aicompany import registry
-from aicompany.models import CompanyState, ProjectPlan, Skill, Task, Team
+from aicompany.models import CompanyState, Plan, ProjectPlan, Skill, Task, TaskInput, Team
+from tests.conftest import make_leaf_plan, make_task_input
 from tests.conftest import write_state, write_team, write_plan, write_skills
 
 

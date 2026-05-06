@@ -4,9 +4,21 @@ import yaml
 
 from . import config
 from .models import (
-    CompanyState, Person, ProjectPlan, Requirement, RequirementTest,
-    Skill, Task, Team, RequirementTestSuite,
+    CompanyState, Person, Plan, Requirement, RequirementTest,
+    Skill, TaskInput, Team, RequirementTestSuite,
 )
+
+
+# ── YAML I/O helpers ───────────────────────────────────────────────────────────
+
+def _load_yaml(path: Path, model_class):
+    with path.open(encoding="utf-8") as f:
+        return model_class.from_dict(yaml.safe_load(f))
+
+
+def _save_yaml(path: Path, obj) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        yaml.dump(obj.to_dict(), f, default_flow_style=False, allow_unicode=True)
 
 
 # ── Company state ──────────────────────────────────────────────────────────────
@@ -16,14 +28,12 @@ def load_state() -> CompanyState:
         raise FileNotFoundError(
             "Company not initialised. Run: python main.py init"
         )
-    with config.STATE_FILE.open() as f:
-        return CompanyState.from_dict(yaml.safe_load(f))
+    return _load_yaml(config.STATE_FILE, CompanyState)
 
 
 def save_state(state: CompanyState) -> None:
     config.COMPANY_DIR.mkdir(parents=True, exist_ok=True)
-    with config.STATE_FILE.open("w") as f:
-        yaml.dump(state.to_dict(), f, default_flow_style=False, allow_unicode=True)
+    _save_yaml(config.STATE_FILE, state)
 
 
 # ── Persons ────────────────────────────────────────────────────────────────────
@@ -36,27 +46,16 @@ def load_person(person_id: str) -> Person:
     path = _persons_dir() / f"{person_id}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Person file not found: {path}")
-    with path.open() as f:
-        return Person.from_dict(yaml.safe_load(f))
+    return _load_yaml(path, Person)
 
 
 def save_person(person: Person) -> None:
-    """
-    Persist a Person to disk and register it in state.yaml.
-
-    Side effect: if this person ID is new, it is appended to state.yaml's
-    persons list. This keeps the central registry in sync automatically.
-    """
+    """Persist a Person and auto-register in state.yaml."""
     _persons_dir().mkdir(parents=True, exist_ok=True)
-    path = _persons_dir() / f"{person.id}.yaml"
-    with path.open("w") as f:
-        yaml.dump(person.to_dict(), f, default_flow_style=False, allow_unicode=True)
-
-    # Keep state.yaml in sync
+    _save_yaml(_persons_dir() / f"{person.id}.yaml", person)
     state = load_state()
-    person_entry = {"id": person.id, "name": person.name, "role": person.role}
     if person.id not in state.person_ids():
-        state.persons.append(person_entry)
+        state.persons.append({"id": person.id, "name": person.name, "role": person.role})
         save_state(state)
 
 
@@ -66,27 +65,16 @@ def load_skill(skill_id: str) -> Skill:
     path = config.SKILLS_DIR / f"{skill_id}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Skill file not found: {path}")
-    with path.open() as f:
-        return Skill.from_dict(yaml.safe_load(f))
+    return _load_yaml(path, Skill)
 
 
 def save_skill(skill: Skill) -> None:
-    """
-    Persist a Skill to disk and register it in state.yaml.
-
-    Side effect: if this skill ID is new, it is appended to state.yaml's
-    skills list. This keeps the central registry in sync automatically.
-    """
+    """Persist a Skill and auto-register in state.yaml."""
     config.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    path = config.SKILLS_DIR / f"{skill.id}.yaml"
-    with path.open("w") as f:
-        yaml.dump(skill.to_dict(), f, default_flow_style=False, allow_unicode=True)
-
-    # Keep state.yaml in sync
+    _save_yaml(config.SKILLS_DIR / f"{skill.id}.yaml", skill)
     state = load_state()
-    skill_entry = {"id": skill.id, "name": skill.name, "category": skill.category}
     if skill.id not in state.skill_ids():
-        state.skills.append(skill_entry)
+        state.skills.append({"id": skill.id, "name": skill.name, "category": skill.category})
         save_state(state)
 
 
@@ -96,8 +84,7 @@ def load_team(team_id: str) -> Team:
     path = config.TEAMS_DIR / f"{team_id}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Team file not found: {path}")
-    with path.open() as f:
-        return Team.from_dict(yaml.safe_load(f))
+    return _load_yaml(path, Team)
 
 
 def load_team_with_members(team_id: str) -> tuple[Team, Person, list[Person], dict]:
@@ -106,38 +93,24 @@ def load_team_with_members(team_id: str) -> tuple[Team, Person, list[Person], di
     members = [load_person(pid) for pid in team.members]
     lead = next((p for p in members if p.id == team.lead_id), members[0])
 
-    # Collect all unique skill IDs referenced by team members
-    skill_ids = set()
-    for p in members:
-        skill_ids.update(p.skills)
-
+    skill_ids = {sid for p in members for sid in p.skills}
     skill_registry = {}
     for sid in skill_ids:
         try:
             skill_registry[sid] = load_skill(sid)
         except FileNotFoundError:
-            pass  # skill file missing — skip gracefully
+            pass
 
     return team, lead, members, skill_registry
 
 
 def save_team(team: Team) -> None:
-    """
-    Persist a Team to disk and register it in state.yaml.
-
-    Side effect: if this team ID is new, it is appended to state.yaml's
-    teams list. This keeps the central registry in sync automatically.
-    """
+    """Persist a Team and auto-register in state.yaml."""
     config.TEAMS_DIR.mkdir(parents=True, exist_ok=True)
-    path = config.TEAMS_DIR / f"{team.id}.yaml"
-    with path.open("w") as f:
-        yaml.dump(team.to_dict(), f, default_flow_style=False, allow_unicode=True)
-
-    # Keep state.yaml in sync
+    _save_yaml(config.TEAMS_DIR / f"{team.id}.yaml", team)
     state = load_state()
-    team_entry = {"id": team.id, "name": team.name, "skills": team.skills}
     if team.id not in state.team_ids():
-        state.teams.append(team_entry)
+        state.teams.append({"id": team.id, "name": team.name, "skills": team.skills})
         save_state(state)
 
 
@@ -162,42 +135,43 @@ def project_dir(project_id: str) -> Path:
 
 def create_project_dir(project_id: str, requirements_text: str) -> Path:
     d = project_dir(project_id)
-    (d / "decisions").mkdir(parents=True, exist_ok=True)
-    (d / "outputs").mkdir(parents=True, exist_ok=True)
-    (d / "sessions").mkdir(parents=True, exist_ok=True)
-    (d / "req_tests").mkdir(parents=True, exist_ok=True)
-    (d / "test_suites").mkdir(parents=True, exist_ok=True)
+    for subdir in ("decisions", "outputs", "sessions", "req_tests", "test_suites"):
+        (d / subdir).mkdir(parents=True, exist_ok=True)
     (d / "requirements.md").write_text(requirements_text, encoding="utf-8")
     return d
 
 
-def load_plan(project_id: str) -> ProjectPlan:
+def load_plan(project_id: str) -> Plan:
     path = project_dir(project_id) / "plan.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Plan not found for project: {project_id}")
-    with path.open() as f:
-        return ProjectPlan.from_dict(yaml.safe_load(f))
+    plan = _load_yaml(path, Plan)
+    # Backward compat: old plan.yaml has no "input" key — inject from requirements.md
+    if not plan.input.specification:
+        req_path = project_dir(project_id) / "requirements.md"
+        if req_path.exists():
+            plan.input = TaskInput(specification=req_path.read_text(encoding="utf-8"))
+    return plan
 
 
-def save_plan(plan: ProjectPlan) -> None:
-    path = project_dir(plan.project_id) / "plan.yaml"
-    with path.open("w") as f:
-        yaml.dump(plan.to_dict(), f, default_flow_style=False, allow_unicode=True)
+def save_plan(plan: Plan) -> None:
+    _save_yaml(project_dir(plan.project_id) / "plan.yaml", plan)
 
 
 def save_output(project_id: str, task_id: str, content: str) -> str:
-    filename = f"{task_id}.md"
-    path = project_dir(project_id) / "outputs" / filename
+    path = project_dir(project_id) / "outputs" / f"{task_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return str(path.relative_to(project_dir(project_id)))
 
 
-def materialize_files(text: str, workspace: Path) -> list[str]:
-    """Parse <write_file path="..."> blocks from agent output and write to workspace.
+def load_output(project_id: str, task_id: str) -> str | None:
+    path = project_dir(project_id) / "outputs" / f"{task_id}.md"
+    return path.read_text(encoding="utf-8") if path.exists() else None
 
-    Returns list of relative paths written. Skips any path that would escape workspace.
-    """
+
+def materialize_files(text: str, workspace: Path) -> list[str]:
+    """Parse <write_file path="..."> blocks from agent output and write to workspace."""
     import re
     pattern = re.compile(
         r'<write_file\s+path=["\']([^"\']+)["\']>(.*?)</write_file>',
@@ -212,13 +186,6 @@ def materialize_files(text: str, workspace: Path) -> list[str]:
         dest.write_text(content.strip("\n"), encoding="utf-8")
         written.append(rel_path)
     return written
-
-
-def load_output(project_id: str, task_id: str) -> str | None:
-    path = project_dir(project_id) / "outputs" / f"{task_id}.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8")
-    return None
 
 
 def save_session(project_id: str, session) -> str:
@@ -246,9 +213,6 @@ def load_session(project_id: str, task_id: str):
 def save_decision(project_id: str, task_id: str, record: dict) -> None:
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    filename = f"{ts}_{task_id}.md"
-    path = project_dir(project_id) / "decisions" / filename
-
     lines = [
         f"# Decision: {record.get('action', '').capitalize()} — {record.get('task_title', task_id)}",
         "",
@@ -262,7 +226,7 @@ def save_decision(project_id: str, task_id: str, record: dict) -> None:
         lines += [f"**User note**: {record['user_note']}", ""]
     if record.get("modified_instructions"):
         lines += ["## Modified instructions", "", record["modified_instructions"], ""]
-
+    path = project_dir(project_id) / "decisions" / f"{ts}_{task_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -270,46 +234,38 @@ def save_decision(project_id: str, task_id: str, record: dict) -> None:
 # ── Requirements & test suites ─────────────────────────────────────────────────
 
 def save_requirements(project_id: str, requirements: list[Requirement]) -> None:
-    """Persist all Requirement objects for a project as a single YAML file."""
     path = project_dir(project_id) / "req_tests" / "_requirements.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
+    with path.open("w", encoding="utf-8") as f:
         yaml.dump([r.to_dict() for r in requirements], f,
                   default_flow_style=False, allow_unicode=True)
 
 
 def load_requirements(project_id: str) -> list[Requirement]:
-    """Load Requirement objects for a project. Returns [] if not yet created."""
     path = project_dir(project_id) / "req_tests" / "_requirements.yaml"
     if not path.exists():
         return []
-    with path.open() as f:
-        data = yaml.safe_load(f) or []
-    return [Requirement.from_dict(r) for r in data]
+    with path.open(encoding="utf-8") as f:
+        return [Requirement.from_dict(r) for r in (yaml.safe_load(f) or [])]
 
 
 def save_test_suite(project_id: str, suite: RequirementTestSuite) -> None:
-    """Persist a RequirementTestSuite YAML under test_suites/<suite_id>.yaml."""
     path = project_dir(project_id) / "test_suites" / f"{suite.id}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        yaml.dump(suite.to_dict(), f, default_flow_style=False, allow_unicode=True)
+    _save_yaml(path, suite)
 
 
 def load_test_suite(project_id: str, suite_id: str) -> RequirementTestSuite:
     path = project_dir(project_id) / "test_suites" / f"{suite_id}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"RequirementTestSuite not found: {suite_id}")
-    with path.open() as f:
-        return RequirementTestSuite.from_dict(yaml.safe_load(f))
+    return _load_yaml(path, RequirementTestSuite)
 
 
 def save_requirement_test(project_id: str, req_test: RequirementTest) -> None:
-    """Persist a RequirementTest record under req_tests/<id>.yaml."""
     path = project_dir(project_id) / "req_tests" / f"{req_test.id}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        yaml.dump(req_test.to_dict(), f, default_flow_style=False, allow_unicode=True)
+    _save_yaml(path, req_test)
 
 
 def list_projects() -> list:
