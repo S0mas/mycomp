@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import click
@@ -204,6 +206,20 @@ def cmd_new_project(requirements_file: str):
 
 # ── run ────────────────────────────────────────────────────────────────────────
 
+def _wait_for_tunnel(url: str, timeout: int = 30) -> bool:
+    """Poll url until it responds (any HTTP response = tunnel is up). Returns True on success."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(url, timeout=5)
+            return True
+        except urllib.error.HTTPError:
+            return True  # any HTTP error still means the tunnel is serving traffic
+        except Exception:
+            time.sleep(1)
+    return False
+
+
 @contextlib.contextmanager
 def _auto_mcp_context():
     """Start MCP server + cloudflare tunnel, inject URL into config.MCP_SERVERS."""
@@ -256,6 +272,13 @@ def _auto_mcp_context():
 
     mcp_url = f"{tunnel_url}/mcp"
     config.MCP_SERVERS = [{"type": "url", "url": mcp_url, "name": "mycomp"}]
+
+    _print_info("Verifying tunnel is reachable...")
+    if not _wait_for_tunnel(tunnel_url):
+        server_proc.kill()
+        tunnel_proc.kill()
+        raise RuntimeError(f"Tunnel URL {tunnel_url} is not reachable after 30s.")
+
     _print_ok(f"MCP ready: {mcp_url}")
 
     try:
@@ -296,6 +319,29 @@ def cmd_run(project_id: str, dry_run: bool):
         except RuntimeError as e:
             _print_err(str(e))
             raise SystemExit(1)
+
+
+# ── fail ───────────────────────────────────────────────────────────────────────
+
+@click.command("fail")
+@click.argument("project_id")
+@click.argument("task_id")
+def cmd_fail(project_id: str, task_id: str):
+    """Mark a specific task as failed."""
+    try:
+        plan = registry.load_plan(project_id)
+    except FileNotFoundError:
+        _print_err(f"Project not found: {project_id}")
+        raise SystemExit(1)
+
+    task = plan.task_by_id(task_id)
+    if not task:
+        _print_err(f"Task not found: {task_id}")
+        raise SystemExit(1)
+
+    task.status = "failed"
+    registry.save_plan(plan)
+    _print_ok(f"{task_id} marked as failed — run './mycomp retry {project_id}' to re-run")
 
 
 # ── retry ──────────────────────────────────────────────────────────────────────
