@@ -34,7 +34,14 @@ class AnthropicBackend:
         )
 
     def call(self, system: str, user: str, max_tokens: int, model: str) -> str:
+        log = config.task_log.get()
+
+        def _log(level: str, msg: str) -> None:
+            if log:
+                log(level, msg)
+
         if self._mcp_servers:
+            _log("BACKEND", f"call model={model} max_tokens={max_tokens} mcp=True timeout={_TIMEOUT_MCP}s")
             response = self._client.beta.messages.create(
                 model=model,
                 max_tokens=max_tokens,
@@ -44,7 +51,16 @@ class AnthropicBackend:
                 betas=["mcp-client-2025-04-04"],
                 timeout=_TIMEOUT_MCP,
             )
+            block_types = [type(b).__name__ for b in response.content]
+            _log("BACKEND", (
+                f"response stop_reason={response.stop_reason} "
+                f"input_tokens={response.usage.input_tokens} "
+                f"output_tokens={response.usage.output_tokens} "
+                f"blocks={block_types}"
+            ))
             return "\n".join(b.text for b in response.content if hasattr(b, "text"))
+
+        _log("BACKEND", f"call model={model} max_tokens={max_tokens} mcp=False timeout={_TIMEOUT_PLAIN}s")
         response = self._client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -52,6 +68,11 @@ class AnthropicBackend:
             messages=[{"role": "user", "content": user}],
             timeout=_TIMEOUT_PLAIN,
         )
+        _log("BACKEND", (
+            f"response stop_reason={response.stop_reason} "
+            f"input_tokens={response.usage.input_tokens} "
+            f"output_tokens={response.usage.output_tokens}"
+        ))
         return response.content[0].text
 
 

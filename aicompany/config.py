@@ -1,5 +1,6 @@
 import json
 import os
+from contextvars import ContextVar
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
@@ -26,6 +27,10 @@ MAX_TOKENS_AUTOFIX = 4096     # token budget for requirements autofix
 
 LLM_RETRY_ATTEMPTS: int = int(os.environ.get("AICOMPANY_LLM_RETRY_ATTEMPTS", "3"))
 LLM_RETRY_BACKOFF_BASE: float = float(os.environ.get("AICOMPANY_LLM_RETRY_BACKOFF_BASE", "2.0"))
+
+# Per-task log callback — set by orchestrator before each task, read by backends/reasoner.
+# Signature: (level: str, message: str) -> None
+task_log: ContextVar = ContextVar("task_log", default=None)
 
 # Timeouts are defined in anthropic_backend.py and read from env there:
 #   AICOMPANY_API_TIMEOUT      — plain calls, default 120s

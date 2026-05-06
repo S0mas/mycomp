@@ -239,6 +239,9 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
         task.status = "running"
         registry.save_plan(plan)
 
+        log_token = config.task_log.set(
+            lambda level, msg, _tid=task.id: _tlog(_tid, level, msg)
+        )
         try:
             output = _execute_task(task, plan, completed_ids, workspace, project_id)
         except Exception as exc:
@@ -246,6 +249,8 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             task.status = "failed"
             registry.save_plan(plan)
             raise OrchestratorError(f"Task {task.id} failed: {exc}") from exc
+        finally:
+            config.task_log.reset(log_token)
 
         rel_path = registry.save_output(project_id, task.id, output)
         task.output_file = rel_path

@@ -70,17 +70,20 @@ class LLMReasoner:
     ) -> str:
         system = build_system_prompt(person, skill_registry, session_rules_text)
         user = build_user_prompt(person, messages)
+        log = config.task_log.get()
         for attempt in range(config.LLM_RETRY_ATTEMPTS):
             try:
                 return self._backend.call(system, user, max_tokens, config.MODEL)
             except Exception as exc:
                 if attempt == config.LLM_RETRY_ATTEMPTS - 1:
                     raise
-                # Don't retry timeouts — they indicate the call ran too long,
-                # not a transient glitch. Retrying would multiply the wait time.
                 if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
                     raise
-                time.sleep(config.LLM_RETRY_BACKOFF_BASE ** attempt)
+                wait = config.LLM_RETRY_BACKOFF_BASE ** attempt
+                if log:
+                    log("RETRY", f"attempt {attempt + 1}/{config.LLM_RETRY_ATTEMPTS} failed: "
+                                 f"{type(exc).__name__}: {exc} — retrying in {wait:.0f}s")
+                time.sleep(wait)
 
 
 # Verify conformance to protocol
