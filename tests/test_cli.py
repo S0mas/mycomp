@@ -256,18 +256,34 @@ class TestRun:
         with patch("aicompany.cli.orchestrator") as mock_orch, \
              patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "t"}]):
             result = runner.invoke(cli, ["run", sample_plan.project_id])
-            mock_orch.run_project.assert_called_once_with(sample_plan.project_id, dry_run=False)
+            mock_orch.run_project.assert_called_once_with(sample_plan.project_id)
 
-    def test_run_exits_early_without_mcp(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+    def test_run_auto_starts_mcp_when_not_configured(self, runner, sample_state, sample_team, sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
         write_persons(sample_persons)
 
-        with patch.object(config, "MCP_SERVERS", []):
+        with patch.object(config, "MCP_SERVERS", []), \
+             patch("aicompany.cli._auto_mcp_context") as mock_ctx, \
+             patch("aicompany.cli.orchestrator") as mock_orch:
+            mock_ctx.return_value.__enter__ = MagicMock(return_value=None)
+            mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+            runner.invoke(cli, ["run", sample_plan.project_id])
+            mock_ctx.assert_called_once()
+            mock_orch.run_project.assert_called_once_with(sample_plan.project_id)
+
+    def test_run_shows_error_when_cloudflared_missing(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+        write_state(sample_state)
+        write_team(sample_team)
+        write_plan(sample_plan)
+        write_persons(sample_persons)
+
+        with patch.object(config, "MCP_SERVERS", []), \
+             patch("aicompany.cli._auto_mcp_context", side_effect=RuntimeError("cloudflared binary not found")):
             result = runner.invoke(cli, ["run", sample_plan.project_id])
         assert result.exit_code == 1
-        assert "AICOMPANY_MCP_SERVERS" in result.output
+        assert "cloudflared" in result.output
 
     def test_dry_run_flag(self, runner, sample_state, sample_team, sample_plan, sample_persons):
         write_state(sample_state)

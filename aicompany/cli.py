@@ -1,3 +1,10 @@
+import contextlib
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -197,22 +204,98 @@ def cmd_new_project(requirements_file: str):
 
 # ── run ────────────────────────────────────────────────────────────────────────
 
+@contextlib.contextmanager
+def _auto_mcp_context():
+    """Start MCP server + cloudflare tunnel, inject URL into config.MCP_SERVERS."""
+    cloudflared = config.BASE_DIR / "cloudflared"
+    if not cloudflared.exists():
+        raise RuntimeError(
+            "cloudflared binary not found in the project root.\n"
+            "Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/\n"
+            "Place the binary at: " + str(cloudflared)
+        )
+
+    with socket.socket() as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+
+    _print_info(f"Starting MCP server on port {port}...")
+    server_proc = subprocess.Popen(
+        [sys.executable, "-m", "aicompany.mcp_server", "--sse", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(1.5)
+    if server_proc.poll() is not None:
+        raise RuntimeError(f"MCP server failed to start on port {port}.")
+
+    _print_info("Starting cloudflare tunnel...")
+    tunnel_log = Path(tempfile.mktemp(suffix=".txt"))
+    tunnel_log_fh = tunnel_log.open("w")
+    tunnel_proc = subprocess.Popen(
+        [str(cloudflared), "tunnel", "--url", f"http://localhost:{port}"],
+        stdout=tunnel_log_fh, stderr=subprocess.STDOUT,
+    )
+    tunnel_log_fh.close()
+
+    tunnel_url = None
+    for _ in range(30):
+        try:
+            m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", tunnel_log.read_text())
+            if m:
+                tunnel_url = m.group()
+                break
+        except OSError:
+            pass
+        time.sleep(1)
+    tunnel_log.unlink(missing_ok=True)
+
+    if not tunnel_url:
+        server_proc.kill()
+        tunnel_proc.kill()
+        raise RuntimeError("Could not get cloudflare tunnel URL after 30s. Is cloudflared working?")
+
+    mcp_url = f"{tunnel_url}/mcp"
+    config.MCP_SERVERS = [{"type": "url", "url": mcp_url, "name": "mycomp"}]
+    _print_ok(f"MCP ready: {mcp_url}")
+
+    try:
+        yield
+    finally:
+        server_proc.kill()
+        tunnel_proc.kill()
+        server_proc.wait()
+        tunnel_proc.wait()
+
+
 @click.command("run")
 @click.argument("project_id")
 @click.option("--dry-run", is_flag=True, help="Print each task (id, title, team, deps) that would run — no LLM calls or file writes.")
 def cmd_run(project_id: str, dry_run: bool):
     """Execute a project's task plan (with human checkpoints)."""
-    if not dry_run and not config.MCP_SERVERS:
-        _print_err(
-            "AICOMPANY_MCP_SERVERS is not set. "
-            "Start an MCP server with ./scripts/start_mcp.sh and set the env var before running."
-        )
-        raise SystemExit(1)
-    try:
-        orchestrator.run_project(project_id, dry_run=dry_run)
-    except orchestrator.OrchestratorError as e:
-        _print_err(str(e))
-        raise SystemExit(1)
+    if dry_run:
+        try:
+            orchestrator.run_project(project_id, dry_run=True)
+        except orchestrator.OrchestratorError as e:
+            _print_err(str(e))
+            raise SystemExit(1)
+        return
+
+    def _run():
+        try:
+            orchestrator.run_project(project_id)
+        except orchestrator.OrchestratorError as e:
+            _print_err(str(e))
+            raise SystemExit(1)
+
+    if config.MCP_SERVERS:
+        _run()
+    else:
+        try:
+            with _auto_mcp_context():
+                _run()
+        except RuntimeError as e:
+            _print_err(str(e))
+            raise SystemExit(1)
 
 
 # ── status ─────────────────────────────────────────────────────────────────────
