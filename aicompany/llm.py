@@ -22,13 +22,13 @@ def _get_backend() -> LLMBackend:
 
 def _call(system: str, user: str, max_tokens: int, backend: LLMBackend | None = None) -> str:
     b = backend or _get_backend()
-    for attempt in range(3):
+    for attempt in range(config.LLM_RETRY_ATTEMPTS):
         try:
             return b.call(system, user, max_tokens, config.MODEL)
         except Exception:
-            if attempt == 2:
+            if attempt == config.LLM_RETRY_ATTEMPTS - 1:
                 raise
-            time.sleep(2 ** attempt)
+            time.sleep(config.LLM_RETRY_BACKOFF_BASE ** attempt)
 
 
 def extract_json_block(text: str) -> dict:

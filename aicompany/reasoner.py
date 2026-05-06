@@ -68,13 +68,13 @@ class LLMReasoner:
     ) -> str:
         system = build_system_prompt(person, skill_registry, session_rules_text)
         user = build_user_prompt(person, messages)
-        for attempt in range(3):
+        for attempt in range(config.LLM_RETRY_ATTEMPTS):
             try:
                 return self._backend.call(system, user, max_tokens, config.MODEL)
             except Exception:
-                if attempt == 2:
+                if attempt == config.LLM_RETRY_ATTEMPTS - 1:
                     raise
-                time.sleep(2 ** attempt)
+                time.sleep(config.LLM_RETRY_BACKOFF_BASE ** attempt)
 
 
 # Verify conformance to protocol

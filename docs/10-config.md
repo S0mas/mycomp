@@ -58,9 +58,13 @@ with sensible defaults.
 
 ## Retry configuration
 
-Retry is hardcoded (not configurable via env var) in `reasoner.py` and `llm.py`:
-- 3 attempts maximum
-- Exponential backoff: 1s after attempt 1, 2s after attempt 2
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AICOMPANY_LLM_RETRY_ATTEMPTS` | `3` | Max number of attempts per LLM call (1 = no retry) |
+| `AICOMPANY_LLM_RETRY_BACKOFF_BASE` | `2.0` | Exponential backoff base in seconds. Wait after attempt N = `base^N`. Default: 1s, 2s, … |
+
+Applied in both `LLMReasoner.think()` and `llm._call()`. Set `AICOMPANY_LLM_RETRY_ATTEMPTS=1`
+to disable retries entirely.
 
 ---
 

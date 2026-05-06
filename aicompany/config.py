@@ -23,3 +23,6 @@ MIN_REQUIREMENTS_LENGTH = 50   # characters — below this, reject as too vague
 MIN_SCORE_TO_PROCEED = 3.5    # overall score below this → hard block, cannot proceed
 MIN_DIMENSION_SCORE = 3       # any single dimension below this → hard block
 MAX_TOKENS_AUTOFIX = 4096     # token budget for requirements autofix
+
+LLM_RETRY_ATTEMPTS: int = int(os.environ.get("AICOMPANY_LLM_RETRY_ATTEMPTS", "3"))
+LLM_RETRY_BACKOFF_BASE: float = float(os.environ.get("AICOMPANY_LLM_RETRY_BACKOFF_BASE", "2.0"))
