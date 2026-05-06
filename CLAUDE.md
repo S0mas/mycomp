@@ -83,14 +83,18 @@ aicompany/          core package
   registry.py       all YAML file I/O. _load_yaml/_save_yaml helpers. save_* auto-registers in state.yaml.
                     Also: save/load requirements, RequirementTestSuites, RequirementTests.
   orchestrator.py   execution loop + topological sort. _handle_checkpoint, _execute_task, _build_project_context
+                    _execute_subtask_plan (recursive sub-task execution), _find_prior_output (all dep outputs)
   oversight.py      human checkpoint UI: _display_task, _prompt_decision, checkpoint()
   validation.py     input validation: validate_requirements_text (delegates to TaskInput.validate()),
                     validate_cto_plan (decomposed into _validate_plan_structure, _validate_tasks,
-                    _validate_task_dependencies), validate_hr_response
+                    _validate_task_dependencies), validate_hr_response. PATTERN_ROLES set for role validation.
   cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 255 tests, all mocked (fake_mcp_server.py — MCP reference impl)
-docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md
+tests/              pytest suite — 271 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
+                    README.md — navigation index for all docs
+                    01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams
+                    potential_issues.md — deferred issues with design notes
 company/            runtime state — gitignored, created by init
   state.yaml        teams + persons + skills + technologies_seen
   skills/           one YAML per shared skill
