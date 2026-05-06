@@ -312,6 +312,35 @@ class TestRun:
 
 # ── status ─────────────────────────────────────────────────────────────────────
 
+class TestRetry:
+    def test_resets_failed_tasks_and_reruns(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+        sample_plan.tasks[1].status = "failed"
+        sample_plan.tasks[2].status = "failed"
+        write_state(sample_state)
+        write_team(sample_team)
+        write_plan(sample_plan)
+        write_persons(sample_persons)
+
+        with patch("aicompany.cli.orchestrator") as mock_orch, \
+             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "t"}]):
+            runner.invoke(cli, ["retry", sample_plan.project_id])
+            mock_orch.run_project.assert_called_once()
+
+        plan = registry.load_plan(sample_plan.project_id)
+        assert plan.tasks[1].status == "pending"
+        assert plan.tasks[2].status == "pending"
+
+    def test_nothing_to_retry_when_no_failures(self, runner, sample_plan):
+        write_plan(sample_plan)
+        result = runner.invoke(cli, ["retry", sample_plan.project_id])
+        assert result.exit_code == 0
+        assert "nothing to retry" in result.output.lower()
+
+    def test_unknown_project_exits_nonzero(self, runner):
+        result = runner.invoke(cli, ["retry", "proj_doesnotexist"])
+        assert result.exit_code == 1
+
+
 class TestStatus:
     def test_no_projects(self, runner):
         result = runner.invoke(cli, ["status"])

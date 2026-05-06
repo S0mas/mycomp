@@ -298,6 +298,47 @@ def cmd_run(project_id: str, dry_run: bool):
             raise SystemExit(1)
 
 
+# ── retry ──────────────────────────────────────────────────────────────────────
+
+@click.command("retry")
+@click.argument("project_id")
+def cmd_retry(project_id: str):
+    """Reset all failed tasks to pending and re-run the project."""
+    try:
+        plan = registry.load_plan(project_id)
+    except FileNotFoundError:
+        _print_err(f"Project not found: {project_id}")
+        raise SystemExit(1)
+
+    failed = [t for t in plan.tasks if t.status == "failed"]
+    if not failed:
+        _print_info("No failed tasks — nothing to retry.")
+        return
+
+    for t in failed:
+        t.status = "pending"
+    plan.status = "pending"
+    registry.save_plan(plan)
+    _print_ok(f"Reset {len(failed)} failed task(s) to pending: {', '.join(t.id for t in failed)}")
+
+    def _run():
+        try:
+            orchestrator.run_project(project_id)
+        except orchestrator.OrchestratorError as e:
+            _print_err(str(e))
+            raise SystemExit(1)
+
+    if config.MCP_SERVERS:
+        _run()
+    else:
+        try:
+            with _auto_mcp_context():
+                _run()
+        except RuntimeError as e:
+            _print_err(str(e))
+            raise SystemExit(1)
+
+
 # ── status ─────────────────────────────────────────────────────────────────────
 
 @click.command("status")
@@ -393,6 +434,7 @@ def cli():
       ./mycomp init                        Bootstrap company state (run once)
       ./mycomp new-project <req.md>        Evaluate requirements, build teams, create plan
       ./mycomp run <project-id>            Execute the plan (human checkpoints included)
+      ./mycomp retry <project-id>          Reset failed tasks and re-run
       ./mycomp status [project-id]         Check task progress
       ./mycomp purge                       Reset all state and start over
     """
@@ -402,5 +444,6 @@ def cli():
 cli.add_command(cmd_init, "init")
 cli.add_command(cmd_new_project, "new-project")
 cli.add_command(cmd_run, "run")
+cli.add_command(cmd_retry, "retry")
 cli.add_command(cmd_status, "status")
 cli.add_command(cmd_purge, "purge")

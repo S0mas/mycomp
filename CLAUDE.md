@@ -34,6 +34,7 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 ./mycomp new-project path/to/requirements.md     # Evaluate + plan a project
 ./mycomp run --dry-run <project-id>              # Preview tasks (no LLM calls)
 ./mycomp run <project-id>                        # Execute project
+./mycomp retry <project-id>                      # Reset failed tasks and re-run
 ./mycomp status                                  # List all projects
 ./mycomp status <project-id>                     # Task-level status
 ./mycomp purge                                   # Delete company/ and projects/ (reset)
@@ -90,7 +91,7 @@ aicompany/          core package
                     _validate_task_dependencies), validate_hr_response. PATTERN_ROLES set for role validation.
   cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 275 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+tests/              pytest suite — 278 tests, all mocked (fake_mcp_server.py — MCP reference impl)
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
                     README.md — navigation index for all docs
                     01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams
