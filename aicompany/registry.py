@@ -1,4 +1,5 @@
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -136,10 +137,19 @@ def project_dir(project_id: str) -> Path:
 
 def create_project_dir(project_id: str, requirements_text: str) -> Path:
     d = project_dir(project_id)
-    for subdir in ("decisions", "outputs", "sessions", "req_tests", "test_suites"):
+    for subdir in ("decisions", "outputs", "sessions", "logs", "req_tests", "test_suites"):
         (d / subdir).mkdir(parents=True, exist_ok=True)
     (d / "requirements.md").write_text(requirements_text, encoding="utf-8")
     return d
+
+
+def append_task_log(project_id: str, task_id: str, level: str, message: str) -> None:
+    """Append a timestamped line to the per-task log file."""
+    path = project_dir(project_id) / "logs" / f"{task_id}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    with path.open("a", encoding="utf-8") as f:
+        f.write(f"{ts} [{level}] {message}\n")
 
 
 def load_plan(project_id: str) -> Plan:

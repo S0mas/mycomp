@@ -130,6 +130,11 @@ def _execute_subtask_plan(
     return "\n\n---\n\n".join(outputs)
 
 
+def _log(project_id: str, task_id: str, level: str, message: str) -> None:
+    print(f"    {message}")
+    registry.append_task_log(project_id, task_id, level, message)
+
+
 def _execute_task(
     task: Task, plan: Plan, completed_ids: set, workspace: str, project_id: str,
 ) -> str:
@@ -143,6 +148,15 @@ def _execute_task(
     context = _build_project_context(plan, completed_ids, workspace, task)
     reasoner = create_reasoner()
     reasoner.setup(members, skill_registry)
+
+    registry.append_task_log(project_id, task.id, "INFO",
+                             f"team={task.assigned_team} pattern={rules.pattern} "
+                             f"max_rounds={rules.max_rounds} members={[p.id for p in members]}")
+
+    def _on_status(msg: str) -> None:
+        print(f"    → {msg}")
+        registry.append_task_log(project_id, task.id, "INFO", f"→ {msg}")
+
     output = run_pattern(
         pattern_name=rules.pattern,
         session=session, lead=lead, members=members,
@@ -150,7 +164,7 @@ def _execute_task(
         task_description=task.input.specification,
         project_context=context,
         reasoner=reasoner, skill_registry=skill_registry,
-        on_status=lambda msg: print(f"    → {msg}"),
+        on_status=_on_status,
         workspace=workspace,
     )
     registry.save_session(project_id, session)
@@ -180,13 +194,19 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
     completed_ids = {t.id for t in plan.tasks if t.status == "done"}
     failed_ids = {t.id for t in plan.tasks if t.status == "failed"}
 
+    def _tlog(task_id: str, level: str, msg: str) -> None:
+        registry.append_task_log(project_id, task_id, level, msg)
+
     for task in sorted_tasks:
         if task.status == "done":
             print(f"  [skip] {task.id}: {task.title} (already done)")
             continue
 
         if any(dep in failed_ids for dep in task.depends_on):
+            failed_deps = [d for d in task.depends_on if d in failed_ids]
+            msg = f"skipped — dependency failed: {failed_deps}"
             print(f"  [skip] {task.id}: dependency failed or was rejected")
+            _tlog(task.id, "SKIP", msg)
             task.status = "failed"
             failed_ids.add(task.id)
             registry.save_plan(plan)
@@ -201,6 +221,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
 
         if task.is_checkpoint and not dry_run:
             action = _handle_checkpoint(task, prior_output, project_id, plan)
+            _tlog(task.id, "CHECKPOINT", f"decision={action}")
             if action == "rejected":
                 task.status = "failed"
                 failed_ids.add(task.id)
@@ -214,12 +235,14 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             continue
 
         print(f"  [run] {task.id}: {task.title} (team: {task.assigned_team})")
+        _tlog(task.id, "START", f"{task.title} | team={task.assigned_team}")
         task.status = "running"
         registry.save_plan(plan)
 
         try:
             output = _execute_task(task, plan, completed_ids, workspace, project_id)
         except Exception as exc:
+            _tlog(task.id, "ERROR", f"{type(exc).__name__}: {exc}")
             task.status = "failed"
             registry.save_plan(plan)
             raise OrchestratorError(f"Task {task.id} failed: {exc}") from exc
@@ -229,6 +252,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
         task.status = "done"
         completed_ids.add(task.id)
         registry.save_plan(plan)
+        _tlog(task.id, "DONE", f"output saved → {rel_path}")
         print(f"  [done] {task.id} → {rel_path}")
 
     if not dry_run and all(t.status in ("done", "failed") for t in plan.tasks):

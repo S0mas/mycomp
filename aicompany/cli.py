@@ -377,6 +377,13 @@ def cmd_status(project_id: str | None):
             f"  {t.id}  [{t.status}]  {t.title}{checkpoint_marker}{deps}", fg=color
         ))
 
+    logs_dir = config.PROJECTS_DIR / project_id / "logs"
+    if logs_dir.exists():
+        log_files = sorted(logs_dir.glob("*.log"))
+        if log_files:
+            click.echo()
+            click.echo(f"Logs: projects/{project_id}/logs/  ({len(log_files)} task log(s))")
+
     if plan.decisions_log:
         click.echo()
         click.echo("Checkpoint decisions:")
