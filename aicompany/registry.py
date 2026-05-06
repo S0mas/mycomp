@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 
 import yaml
@@ -150,6 +151,12 @@ def load_plan(project_id: str) -> Plan:
     if not plan.input.specification:
         req_path = project_dir(project_id) / "requirements.md"
         if req_path.exists():
+            warnings.warn(
+                f"Plan '{project_id}' is missing the 'input' field — injecting from "
+                "requirements.md (old format). Re-save the plan to migrate.",
+                UserWarning,
+                stacklevel=2,
+            )
             plan.input = TaskInput(specification=req_path.read_text(encoding="utf-8"))
     return plan
 

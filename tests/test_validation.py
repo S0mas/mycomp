@@ -88,6 +88,14 @@ class TestValidateHRResponse:
     def test_valid(self):
         resp = {
             "team": {"members": ["a"], "lead_id": "a"},
-            "persons": [{"id": "a", "role": "Lead", "identity": "I am lead"}],
+            "persons": [{"id": "a", "role": "lead", "identity": "I am lead"}],
         }
         assert validate_hr_response(resp, "t") == []
+
+    def test_unexpected_person_role_warns(self):
+        resp = {
+            "team": {"members": ["a"], "lead_id": "a"},
+            "persons": [{"id": "a", "role": "engineer", "identity": "I build things"}],
+        }
+        errors = validate_hr_response(resp, "t")
+        assert any("engineer" in e and "don't recognise" in e for e in errors)

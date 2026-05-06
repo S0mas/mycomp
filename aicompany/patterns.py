@@ -145,10 +145,41 @@ def run_pair_review(
     coder = coders[0] if coders else None
     reviewer = reviewers[0] if reviewers else None
 
-    if not coder or not reviewer:
+    if not reviewer:
         return run_lead_delegates(session, lead, members, task_title,
                                   task_description, project_context,
                                   reasoner, skill_registry, max_tokens, on_status, workspace)
+
+    if not coder:
+        # Lead acts as producer: lead drafts → reviewer reviews → lead revises → lead finalizes.
+        # Used by teams like cto_team (lead + reviewer, no dedicated coder).
+        session.add_message(Message(
+            sender="orchestrator", recipient=lead.id, kind="task",
+            content=_format_task_for_lead(task_title, task_description, project_context, members),
+        ))
+        _status(f"{lead.name} (lead) producing initial draft...")
+        draft = reasoner.think(lead, session.messages_for(lead.id),
+                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        session.add_message(Message(sender=lead.id, recipient=reviewer.id, kind="result", content=draft))
+        session.advance_round()
+
+        reviewer_rules = session.rules.describe(reviewer.id, session.participants)
+        _status(f"{reviewer.name} (reviewer) reviewing...")
+        review = reasoner.think(reviewer, session.messages_for(reviewer.id),
+                                skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
+        session.add_message(Message(sender=reviewer.id, recipient=lead.id, kind="review", content=review))
+
+        if not session.is_complete():
+            session.advance_round()
+            _status(f"{lead.name} (lead) revising based on review...")
+            final = reasoner.think(lead, session.messages_for(lead.id),
+                                   skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        else:
+            final = draft
+
+        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+        session.complete()
+        return final
 
     session.add_message(Message(
         sender="orchestrator", recipient=lead.id, kind="task",

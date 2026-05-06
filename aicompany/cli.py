@@ -202,6 +202,12 @@ def cmd_new_project(requirements_file: str):
 @click.option("--dry-run", is_flag=True, help="Print each task (id, title, team, deps) that would run — no LLM calls or file writes.")
 def cmd_run(project_id: str, dry_run: bool):
     """Execute a project's task plan (with human checkpoints)."""
+    if not dry_run and not config.MCP_SERVERS:
+        _print_err(
+            "AICOMPANY_MCP_SERVERS is not set. "
+            "Start an MCP server with ./scripts/start_mcp.sh and set the env var before running."
+        )
+        raise SystemExit(1)
     try:
         orchestrator.run_project(project_id, dry_run=dry_run)
     except orchestrator.OrchestratorError as e:
@@ -246,6 +252,17 @@ def cmd_status(project_id: str | None):
         click.echo(click.style(
             f"  {t.id}  [{t.status}]  {t.title}{checkpoint_marker}{deps}", fg=color
         ))
+
+    if plan.decisions_log:
+        click.echo()
+        click.echo("Checkpoint decisions:")
+        _decision_color = {"approved": "green", "modified": "yellow", "rejected": "red"}
+        for d in plan.decisions_log:
+            color = _decision_color.get(d.get("action", ""), "white")
+            click.echo(click.style(
+                f"  {d.get('task_id', '?')}  [{d.get('action', '?').upper()}]  {d.get('timestamp', '')}",
+                fg=color,
+            ))
 
 
 # ── purge ──────────────────────────────────────────────────────────────────────

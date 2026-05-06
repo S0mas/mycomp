@@ -206,7 +206,7 @@ class TestPairReview:
         assert output == "Mock output"
         assert session.status == "complete"
 
-    def test_falls_back_without_coder(self):
+    def test_falls_back_to_lead_delegates_without_reviewer(self):
         lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
         arch = Person(id="arch", name="Architect", role="architect", identity="Arch.")
         session = create_session("t1", ["lead", "arch"],
@@ -218,6 +218,22 @@ class TestPairReview:
             "Task", "desc", "ctx", reasoner,
         )
         assert output == "Mock output"
+
+    def test_reviewer_only_uses_lead_as_producer(self):
+        lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
+        reviewer = Person(id="rev", name="Reviewer", role="reviewer", identity="Reviewer.")
+        session = create_session("t1", ["lead", "rev"],
+                                 SessionRules(pattern="pair_review", max_rounds=4))
+        reasoner = _make_mock_reasoner()
+
+        output = run_pair_review(
+            session, lead, [lead, reviewer],
+            "Task", "desc", "ctx", reasoner,
+        )
+        assert output == "Mock output"
+        assert session.status == "complete"
+        # lead draft + reviewer review + lead revise = at least 3 calls
+        assert reasoner.think.call_count >= 3
 
 
 class TestRunPattern:

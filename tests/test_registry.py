@@ -177,6 +177,25 @@ class TestLoadSavePlan:
         loaded = registry.load_plan(sample_plan.project_id)
         assert loaded.status == "running"
 
+    def test_load_plan_warns_on_missing_input(self, sample_plan):
+        import yaml, warnings
+        proj_dir = config.PROJECTS_DIR / sample_plan.project_id
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        (proj_dir / "outputs").mkdir(exist_ok=True)
+        (proj_dir / "decisions").mkdir(exist_ok=True)
+        (proj_dir / "requirements.md").write_text("# Old requirements", encoding="utf-8")
+        raw = sample_plan.to_dict()
+        raw.pop("input", None)
+        with (proj_dir / "plan.yaml").open("w") as f:
+            yaml.dump(raw, f)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            loaded = registry.load_plan(sample_plan.project_id)
+
+        assert any("missing the 'input' field" in str(w.message) for w in caught)
+        assert "Old requirements" in loaded.input.specification
+
 
 class TestOutputs:
     def test_save_and_load_output(self, sample_plan):

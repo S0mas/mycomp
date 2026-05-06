@@ -11,6 +11,8 @@ This module is backend-agnostic. Implementations live with their backends:
 """
 from __future__ import annotations
 
+import time
+
 from . import config
 from .llm_backend import LLMBackend, Reasoner, create_backend
 from .models import Message, Person, Skill, build_prompt
@@ -66,7 +68,13 @@ class LLMReasoner:
     ) -> str:
         system = build_system_prompt(person, skill_registry, session_rules_text)
         user = build_user_prompt(person, messages)
-        return self._backend.call(system, user, max_tokens, config.MODEL)
+        for attempt in range(3):
+            try:
+                return self._backend.call(system, user, max_tokens, config.MODEL)
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
 
 
 # Verify conformance to protocol

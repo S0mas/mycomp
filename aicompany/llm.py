@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from pathlib import Path
 
 from . import config
@@ -21,7 +22,13 @@ def _get_backend() -> LLMBackend:
 
 def _call(system: str, user: str, max_tokens: int, backend: LLMBackend | None = None) -> str:
     b = backend or _get_backend()
-    return b.call(system, user, max_tokens, config.MODEL)
+    for attempt in range(3):
+        try:
+            return b.call(system, user, max_tokens, config.MODEL)
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
 
 
 def extract_json_block(text: str) -> dict:

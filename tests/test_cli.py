@@ -253,9 +253,21 @@ class TestRun:
         write_plan(sample_plan)
         write_persons(sample_persons)
 
-        with patch("aicompany.cli.orchestrator") as mock_orch:
+        with patch("aicompany.cli.orchestrator") as mock_orch, \
+             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "t"}]):
             result = runner.invoke(cli, ["run", sample_plan.project_id])
             mock_orch.run_project.assert_called_once_with(sample_plan.project_id, dry_run=False)
+
+    def test_run_exits_early_without_mcp(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+        write_state(sample_state)
+        write_team(sample_team)
+        write_plan(sample_plan)
+        write_persons(sample_persons)
+
+        with patch.object(config, "MCP_SERVERS", []):
+            result = runner.invoke(cli, ["run", sample_plan.project_id])
+        assert result.exit_code == 1
+        assert "AICOMPANY_MCP_SERVERS" in result.output
 
     def test_dry_run_flag(self, runner, sample_state, sample_team, sample_plan, sample_persons):
         write_state(sample_state)
@@ -274,7 +286,8 @@ class TestRun:
         write_persons(sample_persons)
 
         from aicompany.orchestrator import OrchestratorError
-        with patch("aicompany.cli.orchestrator") as mock_orch:
+        with patch("aicompany.cli.orchestrator") as mock_orch, \
+             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "t"}]):
             mock_orch.run_project.side_effect = OrchestratorError("boom")
             mock_orch.OrchestratorError = OrchestratorError
             result = runner.invoke(cli, ["run", sample_plan.project_id])
@@ -301,6 +314,21 @@ class TestStatus:
         assert "task_001" in result.output
         assert "task_002" in result.output
         assert "CHECKPOINT" in result.output
+
+    def test_shows_decisions_log(self, runner, sample_plan):
+        sample_plan.decisions_log = [
+            {"task_id": "task_002", "action": "approved", "timestamp": "2026-01-01T10:00:00+00:00"},
+        ]
+        write_plan(sample_plan)
+        result = runner.invoke(cli, ["status", sample_plan.project_id])
+        assert result.exit_code == 0
+        assert "task_002" in result.output
+        assert "APPROVED" in result.output
+
+    def test_no_decisions_section_when_empty(self, runner, sample_plan):
+        write_plan(sample_plan)
+        result = runner.invoke(cli, ["status", sample_plan.project_id])
+        assert "Checkpoint decisions" not in result.output
 
 
 # ── purge ───────────────────────────────────────────────────────────────────────

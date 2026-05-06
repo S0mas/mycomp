@@ -233,3 +233,135 @@ class TestRunProjectExecution:
 
         plan = registry.load_plan(sample_plan.project_id)
         assert plan.task_by_id("task_001").status == "failed"
+
+
+# ── _find_prior_output ────────────────────────────────────────────────────────
+
+class TestFindPriorOutput:
+    def test_returns_none_when_no_deps(self, sample_plan):
+        write_plan(sample_plan)
+        task = Task(id="t", title="T", input=make_task_input(), assigned_team="eng",
+                    plan=make_leaf_plan(), depends_on=[])
+        from aicompany.orchestrator import _find_prior_output
+        assert _find_prior_output(sample_plan, task) is None
+
+    def test_returns_single_dep_output(self, sample_plan):
+        write_plan(sample_plan)
+        registry.save_output(sample_plan.project_id, "task_001", "Output A")
+        task = Task(id="t", title="T", input=make_task_input(), assigned_team="eng",
+                    plan=make_leaf_plan(), depends_on=["task_001"])
+        from aicompany.orchestrator import _find_prior_output
+        result = _find_prior_output(sample_plan, task)
+        assert result == "Output A"
+
+    def test_collects_all_dep_outputs(self, sample_plan):
+        write_plan(sample_plan)
+        registry.save_output(sample_plan.project_id, "task_001", "Output A")
+        registry.save_output(sample_plan.project_id, "task_002", "Output B")
+        task = Task(id="t", title="T", input=make_task_input(), assigned_team="eng",
+                    plan=make_leaf_plan(), depends_on=["task_001", "task_002"])
+        from aicompany.orchestrator import _find_prior_output
+        result = _find_prior_output(sample_plan, task)
+        assert "Output A" in result
+        assert "Output B" in result
+
+    def test_skips_missing_dep_outputs(self, sample_plan):
+        write_plan(sample_plan)
+        registry.save_output(sample_plan.project_id, "task_001", "Output A")
+        task = Task(id="t", title="T", input=make_task_input(), assigned_team="eng",
+                    plan=make_leaf_plan(), depends_on=["task_001", "task_002"])
+        from aicompany.orchestrator import _find_prior_output
+        result = _find_prior_output(sample_plan, task)
+        assert result == "Output A"
+
+
+# ── nested subtask execution ──────────────────────────────────────────────────
+
+class TestNestedSubtaskExecution:
+    def test_nested_subtasks_are_executed(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        sub1 = Task(id="sub_001", title="Sub 1", input=make_task_input("sub task 1"),
+                    assigned_team="backend_engineer", plan=make_leaf_plan())
+        sub2 = Task(id="sub_002", title="Sub 2", input=make_task_input("sub task 2"),
+                    assigned_team="backend_engineer", plan=make_leaf_plan(), depends_on=["sub_001"])
+
+        sub_plan = Plan(
+            project_id="proj_nested",
+            title="Sub plan",
+            input=make_task_input("parent sub plan"),
+            requirements=[],
+            tasks=[sub1, sub2],
+        )
+        parent_task = Task(
+            id="task_001",
+            title="Parent task",
+            input=make_task_input("parent work"),
+            assigned_team="backend_engineer",
+            plan=sub_plan,
+        )
+        plan = Plan(
+            project_id="proj_nested",
+            title="Nested Project",
+            input=TaskInput(specification="# requirements"),
+            tech_stack=["python"],
+            teams_required=["backend_engineer"],
+            tasks=[parent_task],
+        )
+
+        write_state(sample_state)
+        write_team(sample_team)
+        write_persons(sample_persons)
+        write_skills(sample_skills)
+        write_plan(plan)
+
+        mock_reasoner = _make_mock_reasoner()
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
+             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
+            orchestrator.run_project("proj_nested")
+
+        out1 = registry.load_output("proj_nested", "sub_001")
+        out2 = registry.load_output("proj_nested", "sub_002")
+        assert out1 is not None
+        assert out2 is not None
+
+    def test_nested_output_is_aggregated(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        sub1 = Task(id="sub_001", title="Sub 1", input=make_task_input("sub 1"),
+                    assigned_team="backend_engineer", plan=make_leaf_plan())
+
+        sub_plan = Plan(
+            project_id="proj_agg",
+            title="Sub plan",
+            input=make_task_input("sub plan"),
+            requirements=[],
+            tasks=[sub1],
+        )
+        parent = Task(
+            id="task_001", title="Parent", input=make_task_input("parent"),
+            assigned_team="backend_engineer", plan=sub_plan,
+        )
+        plan = Plan(
+            project_id="proj_agg",
+            title="Agg Project",
+            input=TaskInput(specification="# requirements"),
+            tech_stack=["python"],
+            teams_required=["backend_engineer"],
+            tasks=[parent],
+        )
+
+        write_state(sample_state)
+        write_team(sample_team)
+        write_persons(sample_persons)
+        write_skills(sample_skills)
+        write_plan(plan)
+
+        mock_reasoner = _make_mock_reasoner()
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
+             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
+            orchestrator.run_project("proj_agg")
+
+        parent_output = registry.load_output("proj_agg", "task_001")
+        assert parent_output is not None
+        assert "Task output" in parent_output

@@ -79,11 +79,11 @@ def _build_project_context(plan: Plan, completed_ids: set, workspace: str = "",
 
 
 def _find_prior_output(plan: Plan, task: Task) -> str | None:
-    for dep_id in reversed(task.depends_on):
-        output = registry.load_output(plan.project_id, dep_id)
-        if output:
-            return output
-    return None
+    outputs = [
+        output for dep_id in task.depends_on
+        if (output := registry.load_output(plan.project_id, dep_id))
+    ]
+    return "\n\n---\n\n".join(outputs) if outputs else None
 
 
 def _handle_checkpoint(
@@ -111,10 +111,32 @@ def _handle_checkpoint(
     return action
 
 
+def _execute_subtask_plan(
+    sub_plan: Plan, completed_ids: set, workspace: str, project_id: str,
+) -> str:
+    """Recursively execute sub-tasks inside a composite task plan."""
+    sorted_subs = _topological_sort(sub_plan.tasks)
+    sub_done: set = set()
+    outputs: list[str] = []
+    for sub in sorted_subs:
+        if any(dep not in sub_done for dep in sub.depends_on):
+            sub.status = "failed"
+            continue
+        sub_output = _execute_task(sub, sub_plan, sub_done, workspace, project_id)
+        registry.save_output(project_id, sub.id, sub_output)
+        sub.status = "done"
+        sub_done.add(sub.id)
+        outputs.append(sub_output)
+    return "\n\n---\n\n".join(outputs)
+
+
 def _execute_task(
     task: Task, plan: Plan, completed_ids: set, workspace: str, project_id: str,
 ) -> str:
     """Load team, build context, run communication pattern. Returns output text."""
+    if task.plan.has_subtasks:
+        return _execute_subtask_plan(task.plan, completed_ids, workspace, project_id)
+
     team, lead, members, skill_registry = registry.load_team_with_members(task.assigned_team)
     rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
     session = create_session(task.id, [p.id for p in members], rules)

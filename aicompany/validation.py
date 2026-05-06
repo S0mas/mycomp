@@ -70,6 +70,8 @@ def validate_cto_plan(plan_dict: dict) -> list[str]:
 
 # ── HR response ────────────────────────────────────────────────────────────────
 
+PATTERN_ROLES = {"lead", "coder", "reviewer", "tester"}
+
 def _validate_team_structure(team_data: dict, team_id: str) -> tuple[list[str], list[str]]:
     """Returns (errors, members)."""
     errors = []
@@ -96,8 +98,14 @@ def _validate_persons(persons_data: list, members: list, team_id: str) -> list[s
         pid = p.get("id", "unknown")
         if not p.get("identity", "").strip() and not p.get("system_prompt", "").strip():
             errors.append(f"Person '{pid}' has no identity.")
-        if not p.get("role", "").strip():
+        role = p.get("role", "").strip()
+        if not role:
             errors.append(f"Person '{pid}' has no role.")
+        elif role not in PATTERN_ROLES:
+            errors.append(
+                f"Person '{pid}' has role '{role}' which patterns don't recognise. "
+                f"Expected one of: {', '.join(sorted(PATTERN_ROLES))}"
+            )
     return errors
 
 
