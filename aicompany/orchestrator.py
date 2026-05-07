@@ -47,7 +47,11 @@ def _build_project_context(plan: Plan, completed_ids: set, workspace: str = "",
     Minimal context for a task: tech stack, workspace, and the task's own requirements.
     No project history, no completed task list — agents discover what they need via tools.
     """
-    lines = [f"**Tech stack**: {', '.join(plan.tech_stack)}"]
+    lines = [f"**Project**: {plan.title}", f"**Tech stack**: {', '.join(plan.tech_stack)}"]
+    if task and task.depends_on:
+        dep_titles = [t.title for t in plan.tasks if t.id in task.depends_on]
+        if dep_titles:
+            lines.append(f"**Builds on**: {', '.join(dep_titles)}")
     if workspace:
         lines.append(f"**Workspace**: `{workspace}`")
 
