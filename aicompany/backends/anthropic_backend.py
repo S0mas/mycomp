@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import anthropic
@@ -169,15 +170,28 @@ class AnthropicBackend:
         # ── Remote server-side MCP (opt-in via AICOMPANY_MCP_SERVERS) ──────
         if self._mcp_servers:
             _log("BACKEND", f"call model={model} max_tokens={max_tokens} mcp=remote timeout={_TIMEOUT_MCP}s")
-            response = self._client.beta.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                mcp_servers=self._mcp_servers,
-                betas=["mcp-client-2025-04-04"],
-                timeout=_TIMEOUT_MCP,
-            )
+            rl_count = 0
+            while True:
+                try:
+                    response = self._client.beta.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        system=system,
+                        messages=[{"role": "user", "content": user}],
+                        mcp_servers=self._mcp_servers,
+                        betas=["mcp-client-2025-04-04"],
+                        timeout=_TIMEOUT_MCP,
+                    )
+                    break
+                except anthropic.RateLimitError as exc:
+                    rl_count += 1
+                    if rl_count > config.LLM_RATE_LIMIT_MAX_RETRIES:
+                        raise LLMRateLimitError(str(exc)) from exc
+                    wait = config.LLM_RATE_LIMIT_WAIT
+                    _log("RATE_LIMIT",
+                         f"Rate limited ({rl_count}/{config.LLM_RATE_LIMIT_MAX_RETRIES})"
+                         f" — waiting {wait}s and retrying")
+                    time.sleep(wait)
             block_types = [type(b).__name__ for b in response.content]
             _log("BACKEND", (
                 f"response stop_reason={response.stop_reason} "
@@ -193,17 +207,30 @@ class AnthropicBackend:
         messages: list[dict] = [{"role": "user", "content": user}]
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
-            try:
-                response = self._client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=messages,
-                    tools=_TOOLS,
-                    timeout=_TIMEOUT_PLAIN,
-                )
-            except anthropic.RateLimitError as exc:
-                raise LLMRateLimitError(str(exc)) from exc
+            # Retry rate-limited calls in-place so the accumulated conversation
+            # history (messages) is preserved — restarting from think() would
+            # lose all tool results and grow the context on every retry.
+            rl_count = 0
+            while True:
+                try:
+                    response = self._client.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        system=system,
+                        messages=messages,
+                        tools=_TOOLS,
+                        timeout=_TIMEOUT_PLAIN,
+                    )
+                    break
+                except anthropic.RateLimitError as exc:
+                    rl_count += 1
+                    if rl_count > config.LLM_RATE_LIMIT_MAX_RETRIES:
+                        raise LLMRateLimitError(str(exc)) from exc
+                    wait = config.LLM_RATE_LIMIT_WAIT
+                    _log("RATE_LIMIT",
+                         f"Rate limited ({rl_count}/{config.LLM_RATE_LIMIT_MAX_RETRIES})"
+                         f" — waiting {wait}s and retrying same call (iteration={iteration})")
+                    time.sleep(wait)
             _log("BACKEND", (
                 f"iteration={iteration} stop_reason={response.stop_reason} "
                 f"input_tokens={response.usage.input_tokens} "

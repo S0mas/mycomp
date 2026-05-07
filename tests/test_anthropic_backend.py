@@ -120,6 +120,43 @@ class TestLocalToolLoop:
             for r in tool_result_msg["content"]
         )
 
+    def test_rate_limit_retried_in_place_without_restarting_loop(self, monkeypatch, tmp_path):
+        """Rate limit during tool loop retries the same create() call, not from scratch."""
+        monkeypatch.setattr(config, "BASE_DIR", tmp_path)
+        backend, mock_client = self._make_backend(monkeypatch)
+
+        tool_block = MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.id = "tu_1"
+        tool_block.name = "list_directory"
+        tool_block.input = {"path": "."}
+
+        final_block = MagicMock(type="text", text="all done")
+
+        import anthropic as _anthropic
+        rate_limit = _anthropic.RateLimitError(
+            "rate limited", response=MagicMock(headers={}), body={}
+        )
+        tool_response = MagicMock(stop_reason="tool_use", content=[tool_block],
+                                  usage=MagicMock(input_tokens=10, output_tokens=5))
+        end_response = MagicMock(stop_reason="end_turn", content=[final_block],
+                                 usage=MagicMock(input_tokens=20, output_tokens=3))
+
+        # First create() → tool_use, second → rate limit, third → end_turn
+        mock_client.messages.create.side_effect = [tool_response, rate_limit, end_response]
+
+        with patch("aicompany.backends.anthropic_backend.time.sleep"), \
+             patch.object(config, "LLM_RATE_LIMIT_MAX_RETRIES", 3), \
+             patch.object(config, "LLM_RATE_LIMIT_WAIT", 1):
+            result = backend.call("sys", "user", 1024, "m")
+
+        assert result == "all done"
+        assert mock_client.messages.create.call_count == 3
+        # Third call must include the tool result from the first call — proves
+        # the loop did NOT restart from scratch after the rate limit.
+        third_call_messages = mock_client.messages.create.call_args_list[2][1]["messages"]
+        assert len(third_call_messages) > 1  # has tool result, not just user message
+
     def test_max_iterations_guard(self, monkeypatch):
         backend, mock_client = self._make_backend(monkeypatch)
         tool_block = MagicMock()

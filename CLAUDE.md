@@ -89,7 +89,7 @@ aicompany/          core package
                     _validate_task_dependencies), validate_hr_response. PATTERN_ROLES set for role validation.
   cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 289 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+tests/              pytest suite — 290 tests, all mocked (fake_mcp_server.py — MCP reference impl)
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
                     README.md — navigation index for all docs
                     01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams
