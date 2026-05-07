@@ -84,14 +84,21 @@ _TOOLS = [
 
 # ── Tool call log formatting ──────────────────────────────────────────────────
 
+def _rel_path(p: str) -> str:
+    """Strip everything up to and including /src/ so paths are workspace-relative."""
+    return p.split("/src/", 1)[-1] if "/src/" in p else p
+
+
 def _format_tool_call(name: str, inputs: dict) -> str:
-    """Compact log representation — never dumps large content fields."""
+    """Compact log representation — workspace-relative paths, no large content."""
+    if name in ("read_file", "write_file", "list_directory"):
+        path = _rel_path(inputs.get("path", "?"))
+        if name == "write_file":
+            return f"{name}({path!r})"
+        return f"{name}({path!r})"
     safe = {}
     for k, v in inputs.items():
-        if isinstance(v, str) and len(v) > 80:
-            safe[k] = f"<{len(v)} chars>"
-        else:
-            safe[k] = v
+        safe[k] = f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 80 else v
     return f"{name}({safe})"
 
 
@@ -263,7 +270,8 @@ class AnthropicBackend:
                 if block.type == "tool_use":
                     _log("TOOL", _format_tool_call(block.name, block.input))
                     result = _execute_tool(block.name, block.input)
-                    _log("TOOL", f"{block.name} → {result[:200]}{'...' if len(result) > 200 else ''}")
+                    preview = result[:120].replace("\n", " ")
+                    _log("TOOL", f"  → {preview}{'…' if len(result) > 120 else ''}")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
