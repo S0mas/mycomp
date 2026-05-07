@@ -23,3 +23,6 @@ tmp/
 
 # cloudflared tunnel binary (downloaded, not committed)
 cloudflared
+.mcp_tunnel_url
+.mcp_server.pid
+.mcp_tunnel.pid

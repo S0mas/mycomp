@@ -1,80 +1,62 @@
 """
-Tests for aicompany/cli.py  (Click commands)
+Tests for aicompany/cli.py (Click commands)
 
 What we verify:
   - `init` creates state.yaml and seeds cto_team + skills
   - `init` is idempotent (second run warns, doesn't crash)
-  - `new-project` reads requirements, runs CTO team, calls HR, saves plan
-  - `new-project` creates missing teams via HR agent
-  - `new-project` reuses existing teams (no HR call when team already present)
+  - `new-project` reads requirements, runs CTO+HR, saves plan
   - `run` delegates to orchestrator.run_project
   - `run --dry-run` passes dry_run=True
   - `status` without args lists projects
   - `status <id>` shows task breakdown
 
-All LLM/agent calls are mocked — no API key needed.
+All agent calls are mocked — no API key needed.
 """
-import json
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from click.testing import CliRunner
 
 import aicompany.config as config
 from aicompany.cli import cli
 from aicompany import registry
-from aicompany.models import CompanyState, Team
+from aicompany.models import CompanyState, RequirementsEvaluation, Team
 from tests.conftest import write_state, write_team, write_plan, write_persons
 
 
-MOCK_PLAN_RESPONSE = {
+def _mock_eval(verdict="proceed", summary="Looks good."):
+    return AsyncMock(return_value=RequirementsEvaluation(
+        clarity=5, completeness=5, feasibility=5,
+        verdict=verdict, summary=summary,
+    ))
+
+
+MOCK_CTO_RESPONSE = {
     "title": "Simple REST API",
     "tech_stack": ["python", "fastapi"],
     "teams_required": ["backend_team"],
     "requirements": [],
-    "tasks": [
-        {
-            "id": "task_001",
-            "title": "Design schema",
-            "description": "Create DB schema",
-            "assigned_team": "backend_team",
-            "depends_on": [],
-            "is_checkpoint": False,
-            "requirement_ids": [],
-        }
-    ],
+    "tasks": [{
+        "id": "task_001",
+        "title": "Design schema",
+        "description": "Create DB schema",
+        "assigned_team": "backend_team",
+        "depends_on": [],
+        "is_checkpoint": False,
+        "requirement_ids": [],
+    }],
 }
 
-MOCK_TEAM_RESPONSE = {
+MOCK_HR_RESPONSE = {
     "team": {
-        "id": "devops_team",
-        "name": "DevOps Team",
-        "skills": ["docker", "kubernetes", "terraform"],
-        "members": ["devops_lead", "devops_coder"],
-        "lead_id": "devops_lead",
+        "id": "backend_team", "name": "Backend Team",
+        "skills": [], "members": ["be_lead"], "lead_id": "be_lead",
     },
-    "persons": [
-        {
-            "id": "devops_lead",
-            "name": "DevOps Lead",
-            "role": "lead",
-            "identity": "You are a DevOps lead.",
-            "skills": ["docker", "kubernetes"],
-            "knowledge": [],
-            "rules": ["Coordinate deployments"],
-            "tools": [],
-        },
-        {
-            "id": "devops_coder",
-            "name": "DevOps Engineer",
-            "role": "coder",
-            "identity": "You are a DevOps engineer.",
-            "skills": ["docker", "kubernetes", "terraform"],
-            "knowledge": [],
-            "rules": ["Write infrastructure as code"],
-            "tools": [],
-        },
-    ],
+    "persons": [{
+        "id": "be_lead", "name": "BE Lead", "role": "lead",
+        "identity": "You are a backend lead.", "skills": [],
+        "knowledge": [], "rules": [], "tools": [],
+    }],
     "skills": [],
 }
 
@@ -114,50 +96,35 @@ class TestInit:
         assert result.exit_code == 0
         assert "already initialised" in result.output
 
+    def test_creates_requirements_policy_file(self, runner):
+        runner.invoke(cli, ["init"])
+        assert config.REQUIREMENTS_POLICY_FILE.exists()
+        content = config.REQUIREMENTS_POLICY_FILE.read_text()
+        assert "acceptance criteria" in content.lower()
+
 
 # ── new-project ────────────────────────────────────────────────────────────────
 
-MOCK_EVAL_RESPONSE = {
-    "clarity": 4, "completeness": 4, "feasibility": 5,
-    "risks": [], "suggestions": [], "summary": "Looks good.", "verdict": "proceed",
-}
-
-
 class TestNewProject:
-    def _run_new_project(self, runner, requirements_file, cto_response=None, hr_response=None):
-        """
-        Helper: run `init` then `new-project`, mocking CTO team planning and LLM calls.
-
-        evaluate_and_gate lives in evaluation.py; plan_and_create_project in planning.py.
-        Each module has its own llm import, so we patch both.
-        """
-        cto_resp = cto_response or MOCK_PLAN_RESPONSE
+    def _run_new_project(self, runner, requirements_file,
+                         cto_response=None, hr_response=None,
+                         eval_verdict="proceed"):
         runner.invoke(cli, ["init"])
-
-        with patch("aicompany.planning._run_cto_planning", return_value=cto_resp), \
-             patch("aicompany.evaluation.llm") as mock_eval_llm, \
-             patch("aicompany.planning.llm") as mock_plan_llm:
-            mock_eval_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
-            mock_plan_llm.hr_create_team.return_value = hr_response or MOCK_TEAM_RESPONSE
+        with patch("aicompany.planning._run_cto_planning",
+                   new=AsyncMock(return_value=cto_response or MOCK_CTO_RESPONSE)), \
+             patch("aicompany.planning._hr_create_team",
+                   new=AsyncMock(return_value=hr_response or MOCK_HR_RESPONSE)), \
+             patch("aicompany.cli.evaluate_requirements",
+                   new=_mock_eval(eval_verdict)):
             result = runner.invoke(cli, ["new-project", requirements_file])
-        return result, mock_plan_llm
+        return result
 
     def test_exits_zero(self, runner, requirements_file):
-        result, _ = self._run_new_project(runner, requirements_file)
+        result = self._run_new_project(runner, requirements_file)
         assert result.exit_code == 0, result.output
 
-    def test_cto_planning_runs(self, runner, requirements_file):
-        with patch("aicompany.planning._run_cto_planning", return_value=MOCK_PLAN_RESPONSE) as mock_cto, \
-             patch("aicompany.evaluation.llm") as mock_eval_llm, \
-             patch("aicompany.planning.llm") as mock_plan_llm:
-            mock_eval_llm.evaluate_requirements.return_value = MOCK_EVAL_RESPONSE
-            mock_plan_llm.hr_create_team.return_value = MOCK_TEAM_RESPONSE
-            runner.invoke(cli, ["init"])
-            runner.invoke(cli, ["new-project", requirements_file])
-        mock_cto.assert_called_once()
-
     def test_plan_file_created(self, runner, requirements_file):
-        result, _ = self._run_new_project(runner, requirements_file)
+        self._run_new_project(runner, requirements_file)
         projects = registry.list_projects()
         assert len(projects) == 1
         plan = registry.load_plan(projects[0])
@@ -169,30 +136,30 @@ class TestNewProject:
         assert len(plan.tasks) == 1
         assert plan.tasks[0].id == "task_001"
 
+    def test_output_shows_project_id(self, runner, requirements_file):
+        result = self._run_new_project(runner, requirements_file)
+        assert "proj_" in result.output
+
     def test_no_hr_call_when_team_exists(self, runner, requirements_file):
-        """cto_team is seeded by init — if CTO requests it, HR should not be called."""
-        cto_using_seeded = {**MOCK_PLAN_RESPONSE, "teams_required": ["cto_team"]}
-        _, mock_llm = self._run_new_project(runner, requirements_file, cto_response=cto_using_seeded)
-        mock_llm.hr_create_team.assert_not_called()
+        runner.invoke(cli, ["init"])
+        mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
+        cto_using_seeded = {**MOCK_CTO_RESPONSE, "teams_required": ["cto_team"]}
+        with patch("aicompany.planning._run_cto_planning",
+                   new=AsyncMock(return_value=cto_using_seeded)), \
+             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+             patch("aicompany.cli.evaluate_requirements", new=_mock_eval()):
+            runner.invoke(cli, ["new-project", requirements_file])
+        mock_hr.assert_not_called()
 
     def test_hr_called_for_missing_team(self, runner, requirements_file):
-        plan_needing_devops = {
-            **MOCK_PLAN_RESPONSE,
-            "teams_required": ["cto_team", "devops_team"],
-            "tasks": MOCK_PLAN_RESPONSE["tasks"] + [{
-                "id": "task_002",
-                "title": "Deploy",
-                "description": "Deploy to prod",
-                "assigned_team": "devops_team",
-                "depends_on": ["task_001"],
-                "is_checkpoint": True,
-                "requirement_ids": [],
-            }],
-        }
-        _, mock_llm = self._run_new_project(runner, requirements_file, cto_response=plan_needing_devops)
-        mock_llm.hr_create_team.assert_called_once()
-        call_args = mock_llm.hr_create_team.call_args[0]
-        assert call_args[0] == "devops_team"
+        runner.invoke(cli, ["init"])
+        mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
+        with patch("aicompany.planning._run_cto_planning",
+                   new=AsyncMock(return_value=MOCK_CTO_RESPONSE)), \
+             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+             patch("aicompany.cli.evaluate_requirements", new=_mock_eval()):
+            runner.invoke(cli, ["new-project", requirements_file])
+        mock_hr.assert_called_once()
 
     def test_requirements_md_copied_into_project(self, runner, requirements_file):
         self._run_new_project(runner, requirements_file)
@@ -201,90 +168,94 @@ class TestNewProject:
         assert req_file.exists()
         assert "REST API" in req_file.read_text()
 
-    def test_output_shows_project_id(self, runner, requirements_file):
-        result, _ = self._run_new_project(runner, requirements_file)
-        assert "proj_" in result.output
-
-    def test_hard_block_on_low_overall_score(self, runner, requirements_file):
-        low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 1, "completeness": 1, "feasibility": 1, "verdict": "reject"}
+    def test_cto_called(self, runner, requirements_file):
         runner.invoke(cli, ["init"])
-        with patch("aicompany.evaluation.llm") as mock_llm:
-            mock_llm.evaluate_requirements.return_value = low_eval
-            result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
-        assert result.exit_code == 1
-        assert "Cannot proceed" in result.output
+        mock_cto = AsyncMock(return_value=MOCK_CTO_RESPONSE)
+        with patch("aicompany.planning._run_cto_planning", new=mock_cto), \
+             patch("aicompany.planning._hr_create_team",
+                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)), \
+             patch("aicompany.cli.evaluate_requirements", new=_mock_eval()):
+            runner.invoke(cli, ["new-project", requirements_file])
+        mock_cto.assert_called_once()
 
-    def test_hard_block_on_single_low_dimension(self, runner, requirements_file):
-        low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 2}
+    def test_evaluation_reject_blocks_planning(self, runner, requirements_file):
         runner.invoke(cli, ["init"])
-        with patch("aicompany.evaluation.llm") as mock_llm:
-            mock_llm.evaluate_requirements.return_value = low_eval
-            result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
+        mock_cto = AsyncMock(return_value=MOCK_CTO_RESPONSE)
+        with patch("aicompany.planning._run_cto_planning", new=mock_cto), \
+             patch("aicompany.planning._hr_create_team",
+                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)), \
+             patch("aicompany.cli.evaluate_requirements",
+                   new=_mock_eval("reject", "Too vague.")):
+            result = runner.invoke(cli, ["new-project", requirements_file])
         assert result.exit_code == 1
-        assert "Clarity" in result.output
+        mock_cto.assert_not_called()
 
-    def test_hard_block_on_reject_verdict(self, runner, requirements_file):
-        reject_eval = {**MOCK_EVAL_RESPONSE, "verdict": "reject"}
-        runner.invoke(cli, ["init"])
-        with patch("aicompany.evaluation.llm") as mock_llm:
-            mock_llm.evaluate_requirements.return_value = reject_eval
-            result = runner.invoke(cli, ["new-project", requirements_file], input="n\n")
-        assert result.exit_code == 1
-        assert "REJECT" in result.output
+    def test_evaluation_needs_work_warns_but_continues(self, runner, requirements_file):
+        result = self._run_new_project(runner, requirements_file, eval_verdict="needs_work")
+        assert result.exit_code == 0
+        assert "need improvement" in result.output.lower() or "Proceeding anyway" in result.output
 
-    def test_autofix_saves_fixed_file(self, runner, requirements_file):
-        low_eval = {**MOCK_EVAL_RESPONSE, "clarity": 2, "verdict": "needs_work"}
+    def test_short_requirements_rejected(self, runner, tmp_path):
+        short_req = tmp_path / "short.md"
+        short_req.write_text("too short")
         runner.invoke(cli, ["init"])
-        with patch("aicompany.evaluation.llm") as mock_llm:
-            mock_llm.evaluate_requirements.return_value = low_eval
-            mock_llm.autofix_requirements.return_value = "# Improved Requirements\n\nBuild a REST API."
-            result = runner.invoke(cli, ["new-project", requirements_file], input="y\n")
+        result = runner.invoke(cli, ["new-project", str(short_req)])
         assert result.exit_code == 1
-        assert "Improved requirements saved" in result.output
-        mock_llm.autofix_requirements.assert_called_once()
 
 
 # ── run ────────────────────────────────────────────────────────────────────────
 
 class TestRun:
-    def test_delegates_to_orchestrator(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+    def test_delegates_to_orchestrator(self, runner, sample_state, sample_team,
+                                        sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
         write_persons(sample_persons)
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
+            mock_orch.run_project = AsyncMock()
             runner.invoke(cli, ["run", sample_plan.project_id])
-            mock_orch.run_project.assert_called_once_with(sample_plan.project_id, dry_run=False)
+            mock_orch.run_project.assert_called_once_with(
+                sample_plan.project_id, dry_run=False)
 
-    def test_dry_run_flag(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+    def test_dry_run_flag(self, runner, sample_state, sample_team,
+                          sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
         write_persons(sample_persons)
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
+            mock_orch.run_project = AsyncMock()
             runner.invoke(cli, ["run", "--dry-run", sample_plan.project_id])
-            mock_orch.run_project.assert_called_once_with(sample_plan.project_id, dry_run=True)
+            mock_orch.run_project.assert_called_once_with(
+                sample_plan.project_id, dry_run=True)
 
-    def test_orchestrator_error_exits_nonzero(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+    def test_orchestrator_error_exits_nonzero(self, runner, sample_state,
+                                               sample_team, sample_plan, sample_persons):
         write_state(sample_state)
         write_team(sample_team)
         write_plan(sample_plan)
         write_persons(sample_persons)
 
         from aicompany.orchestrator import OrchestratorError
+
+        async def _raise(*a, **kw):
+            raise OrchestratorError("boom")
+
         with patch("aicompany.cli.orchestrator") as mock_orch:
-            mock_orch.run_project.side_effect = OrchestratorError("boom")
+            mock_orch.run_project = _raise
             mock_orch.OrchestratorError = OrchestratorError
             result = runner.invoke(cli, ["run", sample_plan.project_id])
-            assert result.exit_code == 1
+        assert result.exit_code == 1
 
 
-# ── status ─────────────────────────────────────────────────────────────────────
+# ── retry ──────────────────────────────────────────────────────────────────────
 
 class TestRetry:
-    def test_resets_failed_tasks_and_reruns(self, runner, sample_state, sample_team, sample_plan, sample_persons):
+    def test_resets_failed_tasks_and_reruns(self, runner, sample_state,
+                                             sample_team, sample_plan, sample_persons):
         sample_plan.tasks[1].status = "failed"
         sample_plan.tasks[2].status = "failed"
         write_state(sample_state)
@@ -293,6 +264,7 @@ class TestRetry:
         write_persons(sample_persons)
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
+            mock_orch.run_project = AsyncMock()
             runner.invoke(cli, ["retry", sample_plan.project_id])
             mock_orch.run_project.assert_called_once()
 
@@ -310,6 +282,8 @@ class TestRetry:
         result = runner.invoke(cli, ["retry", "proj_doesnotexist"])
         assert result.exit_code == 1
 
+
+# ── status ─────────────────────────────────────────────────────────────────────
 
 class TestStatus:
     def test_no_projects(self, runner):
@@ -332,7 +306,8 @@ class TestStatus:
 
     def test_shows_decisions_log(self, runner, sample_plan):
         sample_plan.decisions_log = [
-            {"task_id": "task_002", "action": "approved", "timestamp": "2026-01-01T10:00:00+00:00"},
+            {"task_id": "task_002", "action": "approved",
+             "timestamp": "2026-01-01T10:00:00+00:00"},
         ]
         write_plan(sample_plan)
         result = runner.invoke(cli, ["status", sample_plan.project_id])
@@ -354,14 +329,12 @@ class TestPurge:
         write_plan(sample_plan)
         assert config.COMPANY_DIR.exists()
         assert config.PROJECTS_DIR.exists()
-
         result = runner.invoke(cli, ["purge"], input="y\n")
         assert result.exit_code == 0
         assert not config.COMPANY_DIR.exists()
         assert not config.PROJECTS_DIR.exists()
 
     def test_purge_clean_state_reports_nothing_to_remove(self, runner):
-        # Remove dirs that isolated_fs creates so we hit the "already clean" path
         import shutil
         shutil.rmtree(config.COMPANY_DIR, ignore_errors=True)
         shutil.rmtree(config.PROJECTS_DIR, ignore_errors=True)

@@ -1,8 +1,8 @@
 """
 CTO planning, HR team creation, and project assembly.
 
-Owns the multi-step flow: CTO plans → HR creates teams → project is assembled
-and persisted. Each step is extracted into its own focused helper.
+CTO planning runs through the CTO team's PersonAgents (pair_review pattern).
+HR team creation uses a one-shot SDK query to create team definitions on demand.
 """
 from __future__ import annotations
 
@@ -10,18 +10,58 @@ import uuid
 
 import yaml
 
-from . import config, llm, registry
+from . import config, registry
 from .communication import create_session, run_pattern
+from .evaluation import extract_json_block as _extract_json_block, evaluate_sub_requirements
 from .models import (
-    Person, Plan, Requirement, SessionRules, Skill, Task, TaskInput, Team,
+    Person, Plan, Requirement, SessionRules, Skill, SubRequirement, Task, TaskInput, Team,
 )
-from .reasoner import create_reasoner
 from .validation import validate_cto_plan, validate_hr_response
 
 
-class PlanResult:
-    """Outcome of CTO planning + HR team creation."""
+# ── HR system prompt ──────────────────────────────────────────────────────────
 
+_HR_SYSTEM = """\
+You are an HR manager for an AI software company. You design software engineering teams.
+
+Return ONLY a ```json block with exactly this schema — no prose before or after:
+
+```json
+{
+  "team": {
+    "id": "<team_id>",
+    "name": "<Human-readable team name>",
+    "skills": ["skill_id_1"],
+    "members": ["person_id_1", "person_id_2"],
+    "lead_id": "person_id_1",
+    "communication": {"pattern": "pair_review", "max_rounds": 4}
+  },
+  "persons": [
+    {
+      "id": "unique_snake_id",
+      "name": "Full Name",
+      "role": "lead",
+      "identity": "You are ... (2-3 sentences: expertise, approach, style)",
+      "skills": [],
+      "knowledge": ["specific technical knowledge point"],
+      "rules": ["a behavioral constraint this person always follows"],
+      "tools": []
+    }
+  ],
+  "skills": []
+}
+```
+
+Rules:
+- Include a lead and at least one coder or reviewer.
+- Roles must be one of: lead, coder, reviewer, tester.
+- IDs are snake_case, unique, descriptive (e.g. be_lead, be_coder_1).
+- Identity must describe the persona clearly so the agent knows how to behave.
+- knowledge and rules shape how the agent thinks — be specific and actionable.
+"""
+
+
+class PlanResult:
     def __init__(
         self,
         project_id: str,
@@ -29,47 +69,69 @@ class PlanResult:
         plan_warnings: list[str],
         created_teams: list[str],
         hr_warnings: dict[str, list[str]],
+        sub_req_evaluations: list | None = None,
     ) -> None:
         self.project_id = project_id
         self.plan = plan
         self.plan_warnings = plan_warnings
         self.created_teams = created_teams
         self.hr_warnings = hr_warnings
+        self.sub_req_evaluations = sub_req_evaluations or []
 
 
 # ── CTO planning ──────────────────────────────────────────────────────────────
 
-def _run_cto_planning(requirements_text: str, state_yaml: str, on_status: callable) -> dict:
-    """Run the CTO team to produce a project plan dict."""
+async def _run_cto_planning(requirements_text: str, state_yaml: str, on_status: callable) -> dict:
     on_status("CTO team is analysing requirements...")
     team, lead, members, skill_registry = registry.load_team_with_members("cto_team")
     rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
     session = create_session("cto_planning", [p.id for p in members], rules)
-    reasoner = create_reasoner()
-    reasoner.setup(members, skill_registry)
 
-    task_description = (
-        f"## Client Requirements\n\n{requirements_text}\n\n"
-        f"## Current Company Registry (YAML)\n\n```yaml\n{state_yaml}\n```"
-    )
-    cto_output = run_pattern(
+    cto_output = await run_pattern(
         pattern_name=rules.pattern,
         session=session, lead=lead, members=members,
         task_title="Project Planning",
-        task_description=task_description,
+        task_description=(
+            f"## Client Requirements\n\n{requirements_text}\n\n"
+            f"## Current Company Registry (YAML)\n\n```yaml\n{state_yaml}\n```"
+        ),
         project_context="",
-        reasoner=reasoner, skill_registry=skill_registry,
-        workspace="", on_status=on_status,
+        workspace=config.BASE_DIR,
+        skill_registry=skill_registry,
+        on_status=on_status,
     )
-    return llm.extract_json_block(cto_output)
+    return _extract_json_block(cto_output)
 
 
 # ── HR team creation ──────────────────────────────────────────────────────────
 
-def _create_missing_teams(
+async def _hr_create_team(team_id: str, tech_context: str) -> dict:
+    """Use a one-shot SDK query to create a team definition."""
+    from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
+
+    prompt = (
+        f"Create a software engineering team with id='{team_id}'.\n"
+        f"Technology context: {tech_context}"
+    )
+    text = ""
+    async for msg in query(
+        prompt=prompt,
+        options=ClaudeCodeOptions(
+            system_prompt=_HR_SYSTEM,
+            permission_mode="bypassPermissions",
+            max_turns=3,
+        ),
+    ):
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, TextBlock) and block.text:
+                    text += block.text
+    return _extract_json_block(text)
+
+
+async def _create_missing_teams(
     teams_required: list[str], tech_stack: list[str], on_status: callable,
 ) -> tuple[list[str], dict[str, list[str]]]:
-    """Call HR to create any teams not yet in the registry. Returns (created_ids, warnings)."""
     state = registry.load_state()
     missing = [tid for tid in teams_required if tid not in state.team_ids()]
     created: list[str] = []
@@ -78,7 +140,7 @@ def _create_missing_teams(
 
     for team_id in missing:
         on_status(f"Team '{team_id}' not found — HR is creating it...")
-        result = llm.hr_create_team(team_id, tech_context)
+        result = await _hr_create_team(team_id, tech_context)
         errors = validate_hr_response(result, team_id)
         if errors:
             warnings[team_id] = errors
@@ -98,7 +160,6 @@ def _create_missing_teams(
 # ── Technology tracking ───────────────────────────────────────────────────────
 
 def _update_technologies(tech_stack: list[str]) -> None:
-    """Append newly seen technologies to company state."""
     state = registry.load_state()
     seen_lower = {t.lower() for t in state.technologies_seen}
     for tech in tech_stack:
@@ -111,7 +172,6 @@ def _update_technologies(tech_stack: list[str]) -> None:
 # ── Project assembly ──────────────────────────────────────────────────────────
 
 def _build_parent_context(title: str, tech_stack: list, raw_tasks: list) -> str:
-    """High-level project summary baked into every task's TaskInput.context."""
     lines = [f"Project: {title}", f"Tech stack: {', '.join(tech_stack)}"]
     if raw_tasks:
         lines.append("Tasks in this project:")
@@ -120,7 +180,6 @@ def _build_parent_context(title: str, tech_stack: list, raw_tasks: list) -> str:
 
 
 def _scope_requirements(requirements: list, req_ids: set) -> list:
-    """Return requirements scoped to the sub-requirement IDs a task addresses."""
     if not req_ids:
         return []
     scoped = []
@@ -137,15 +196,9 @@ def _scope_requirements(requirements: list, req_ids: set) -> list:
 
 
 def _assemble_project(
-    project_id: str,
-    title: str,
-    tech_stack: list,
-    teams_required: list,
-    raw_tasks: list,
-    requirements: list,
-    requirements_text: str,
+    project_id: str, title: str, tech_stack: list, teams_required: list,
+    raw_tasks: list, requirements: list, requirements_text: str,
 ) -> Plan:
-    """Build Plan + leaf Tasks from CTO output. Pure transformation, no I/O."""
     parent_context = _build_parent_context(title, tech_stack, raw_tasks)
     tasks = []
     for i, raw in enumerate(raw_tasks):
@@ -179,23 +232,37 @@ def _assemble_project(
     )
 
 
-# ── Orchestration ─────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
-def plan_and_create_project(
+async def plan_and_create_project(
     requirements_text: str,
     on_status: callable = None,
 ) -> PlanResult:
-    """
-    Run CTO planning, create missing teams via HR, assemble and persist the project.
-    Returns a PlanResult with the plan and metadata.
-    """
     _status = on_status or (lambda msg: None)
 
     state = registry.load_state()
     state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
 
-    plan_dict = _run_cto_planning(requirements_text, state_yaml, _status)
+    plan_dict = await _run_cto_planning(requirements_text, state_yaml, _status)
     plan_warnings = validate_cto_plan(plan_dict)
+
+    # Evaluate CTO-generated sub-requirements against the policy
+    all_sub_reqs = [
+        SubRequirement.from_dict({**sub, "parent_id": req["id"]})
+        for req in plan_dict.get("requirements", [])
+        for sub in req.get("sub_requirements", [])
+    ]
+    sub_req_evaluations = []
+    if all_sub_reqs:
+        _status(f"Evaluating {len(all_sub_reqs)} sub-requirements against policy...")
+        sub_req_evaluations = await evaluate_sub_requirements(all_sub_reqs)
+        failed = [r for r in sub_req_evaluations if r.failed]
+        needs_work = [r for r in sub_req_evaluations if r.verdict == "needs_work"]
+        if failed:
+            _status(f"WARNING: {len(failed)} sub-requirement(s) failed policy — "
+                    f"{', '.join(r.id for r in failed)}")
+        if needs_work:
+            _status(f"NOTE: {len(needs_work)} sub-requirement(s) need improvement")
 
     title = plan_dict.get("title", "Untitled Project")
     tech_stack = plan_dict.get("tech_stack", [])
@@ -203,7 +270,7 @@ def plan_and_create_project(
     raw_tasks = plan_dict.get("tasks", [])
     requirements = [Requirement.from_dict(r) for r in plan_dict.get("requirements", [])]
 
-    created_teams, hr_warnings = _create_missing_teams(teams_required, tech_stack, _status)
+    created_teams, hr_warnings = await _create_missing_teams(teams_required, tech_stack, _status)
     _update_technologies(tech_stack)
 
     project_id = f"proj_{uuid.uuid4().hex[:8]}"

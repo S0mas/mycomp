@@ -1,6 +1,7 @@
-"""Tests for Message, Session, SessionRules, and communication patterns."""
+"""Tests for Message, Session, SessionRules, and async communication patterns."""
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
+from pathlib import Path
 
 from aicompany.models import Message, Session, SessionRules, Person
 from aicompany.communication import (
@@ -99,7 +100,7 @@ class TestSession:
         assert feedback is not None
         assert feedback.kind == "system"
         assert "not delivered" in feedback.content
-        assert feedback.recipient == "lead"  # feedback goes back to sender
+        assert feedback.recipient == "lead"
 
     def test_messages_for(self):
         s = self._make_session()
@@ -123,7 +124,7 @@ class TestSession:
         assert s.status == "complete"
 
 
-# ── Communication patterns ────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_persons():
     lead = Person(id="lead", name="Lead", role="lead", identity="You are lead.")
@@ -132,120 +133,145 @@ def _make_persons():
     return lead, coder, reviewer
 
 
-def _make_mock_reasoner():
-    mock = MagicMock()
-    mock.think.return_value = "Mock output"
-    return mock
+def _fake_agent_class(response: str = "Mock output"):
+    """Returns a FakePersonAgent class whose think() always returns response."""
+    class FakePersonAgent:
+        _think_count = 0
 
+        def __init__(self, person, workspace, skill_registry=None):
+            self.person = person
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def think(self, message: str) -> str:
+            FakePersonAgent._think_count += 1
+            return response
+
+    FakePersonAgent._think_count = 0
+    return FakePersonAgent
+
+
+# ── Communication patterns ────────────────────────────────────────────────────
 
 class TestLeadDelegates:
-    def test_produces_output(self):
+    async def test_produces_output(self, tmp_path):
         lead, coder, reviewer = _make_persons()
         session = create_session("t1", ["lead", "coder", "reviewer"])
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_lead_delegates(
-            session, lead, [lead, coder, reviewer],
-            "Build API", "Build a REST API", "Python project",
-            reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_lead_delegates(
+                session, lead, [lead, coder, reviewer],
+                "Build API", "Build a REST API", "Python project", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
 
-    def test_reasoner_called_for_each_person(self):
+    async def test_agent_called_for_each_person(self, tmp_path):
         lead, coder, reviewer = _make_persons()
         session = create_session("t1", ["lead", "coder", "reviewer"])
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        run_lead_delegates(
-            session, lead, [lead, coder, reviewer],
-            "Build API", "desc", "ctx", reasoner,
-        )
-        # lead brief + coder execute + reviewer execute + lead synthesize = 4
-        assert reasoner.think.call_count == 4
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await run_lead_delegates(
+                session, lead, [lead, coder, reviewer],
+                "Build API", "desc", "ctx", tmp_path,
+            )
+        # lead brief + coder + reviewer + lead synthesize = 4
+        assert FakeAgent._think_count == 4
 
-    def test_single_person_team(self):
+    async def test_single_person_team(self, tmp_path):
         lead = Person(id="lead", name="Lead", role="lead", identity="Solo lead.")
         session = create_session("t1", ["lead"])
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_lead_delegates(
-            session, lead, [lead],
-            "Task", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_lead_delegates(
+                session, lead, [lead],
+                "Task", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
-        # Only 1 call — lead brief, no synthesis needed
-        assert reasoner.think.call_count == 1
+        # Only 1 call — lead brief only (no members → no synthesis needed)
+        assert FakeAgent._think_count == 1
 
-    def test_status_callback(self):
+    async def test_status_callback(self, tmp_path):
         lead, coder, reviewer = _make_persons()
         session = create_session("t1", ["lead", "coder", "reviewer"])
-        reasoner = _make_mock_reasoner()
         statuses = []
+        FakeAgent = _fake_agent_class()
 
-        run_lead_delegates(
-            session, lead, [lead, coder, reviewer],
-            "Task", "desc", "ctx", reasoner,
-            on_status=lambda msg: statuses.append(msg),
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await run_lead_delegates(
+                session, lead, [lead, coder, reviewer],
+                "Task", "desc", "ctx", tmp_path,
+                on_status=lambda msg: statuses.append(msg),
+            )
         assert any("Lead" in s for s in statuses)
         assert any("Coder" in s for s in statuses)
 
 
 class TestPairReview:
-    def test_produces_output(self):
+    async def test_produces_output(self, tmp_path):
         lead, coder, reviewer = _make_persons()
         session = create_session("t1", ["lead", "coder", "reviewer"],
                                  SessionRules(pattern="pair_review", max_rounds=5))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_pair_review(
-            session, lead, [lead, coder, reviewer],
-            "Build API", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_pair_review(
+                session, lead, [lead, coder, reviewer],
+                "Build API", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
 
-    def test_falls_back_to_lead_delegates_without_reviewer(self):
+    async def test_falls_back_to_lead_delegates_without_reviewer(self, tmp_path):
         lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
         arch = Person(id="arch", name="Architect", role="architect", identity="Arch.")
         session = create_session("t1", ["lead", "arch"],
                                  SessionRules(pattern="pair_review"))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_pair_review(
-            session, lead, [lead, arch],
-            "Task", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_pair_review(
+                session, lead, [lead, arch],
+                "Task", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
 
-    def test_reviewer_only_uses_lead_as_producer(self):
+    async def test_reviewer_only_uses_lead_as_producer(self, tmp_path):
         lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
         reviewer = Person(id="rev", name="Reviewer", role="reviewer", identity="Reviewer.")
         session = create_session("t1", ["lead", "rev"],
                                  SessionRules(pattern="pair_review", max_rounds=4))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_pair_review(
-            session, lead, [lead, reviewer],
-            "Task", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_pair_review(
+                session, lead, [lead, reviewer],
+                "Task", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
         # lead draft + reviewer review + lead revise = at least 3 calls
-        assert reasoner.think.call_count >= 3
+        assert FakeAgent._think_count >= 3
 
 
 class TestRunPattern:
-    def test_unknown_pattern_falls_back(self):
+    async def test_unknown_pattern_falls_back(self, tmp_path):
         lead, coder, reviewer = _make_persons()
         session = create_session("t1", ["lead", "coder", "reviewer"])
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_pattern(
-            "nonexistent_pattern", session, lead, [lead, coder, reviewer],
-            "Task", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_pattern(
+                "nonexistent_pattern", session, lead, [lead, coder, reviewer],
+                "Task", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
 
@@ -258,75 +284,80 @@ class TestDevelopTestReview:
         reviewer = Person(id="reviewer", name="Reviewer", role="reviewer", identity="Reviewer.")
         return lead, coder, tester, reviewer
 
-    def test_full_team_produces_output(self):
+    async def test_full_team_produces_output(self, tmp_path):
         lead, coder, tester, reviewer = self._make_full_team()
         members = [lead, coder, tester, reviewer]
         session = create_session("t1", [m.id for m in members],
                                  SessionRules(pattern="develop_test_review", max_rounds=6))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_develop_test_review(
-            session, lead, members,
-            "Implement login", "POST /login endpoint", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_develop_test_review(
+                session, lead, members,
+                "Implement login", "POST /login endpoint", "ctx", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
 
-    def test_tester_and_coder_and_reviewer_all_called(self):
+    async def test_all_roles_called(self, tmp_path):
         lead, coder, tester, reviewer = self._make_full_team()
         members = [lead, coder, tester, reviewer]
         session = create_session("t1", [m.id for m in members],
                                  SessionRules(pattern="develop_test_review", max_rounds=6))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        run_develop_test_review(session, lead, members, "Task", "desc", "ctx", reasoner)
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await run_develop_test_review(
+                session, lead, members, "Task", "desc", "ctx", tmp_path,
+            )
+        # lead (brief + final), coder (impl + revise), tester, reviewer = at least 6
+        assert FakeAgent._think_count >= 4
 
-        # lead (brief + final), coder (impl + revise), tester, reviewer = at least 5 think() calls
-        assert reasoner.think.call_count >= 4
-
-    def test_falls_back_to_pair_review_without_tester(self):
+    async def test_falls_back_to_pair_review_without_tester(self, tmp_path):
         lead, coder, _, reviewer = self._make_full_team()
         members = [lead, coder, reviewer]
         session = create_session("t1", [m.id for m in members],
                                  SessionRules(pattern="develop_test_review", max_rounds=5))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_develop_test_review(
-            session, lead, members, "Task", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_develop_test_review(
+                session, lead, members, "Task", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
 
-    def test_falls_back_to_lead_delegates_without_coder(self):
+    async def test_falls_back_to_lead_delegates_without_coder(self, tmp_path):
         lead, _, tester, _ = self._make_full_team()
         members = [lead, tester]
         session = create_session("t1", [m.id for m in members],
                                  SessionRules(pattern="develop_test_review", max_rounds=4))
-        reasoner = _make_mock_reasoner()
+        FakeAgent = _fake_agent_class()
 
-        output = run_develop_test_review(
-            session, lead, members, "Task", "desc", "ctx", reasoner,
-        )
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_develop_test_review(
+                session, lead, members, "Task", "desc", "ctx", tmp_path,
+            )
         assert output == "Mock output"
 
-    def test_registered_in_patterns(self):
-        assert run_pattern(
-            "develop_test_review",
-            create_session("t1", ["lead", "coder", "tester", "reviewer"],
-                           SessionRules(max_rounds=6)),
-            Person(id="lead", name="L", role="lead", identity="L."),
-            [Person(id="lead", name="L", role="lead", identity="L."),
-             Person(id="coder", name="C", role="coder", identity="C."),
-             Person(id="tester", name="T", role="tester", identity="T."),
-             Person(id="reviewer", name="R", role="reviewer", identity="R.")],
-            "Task", "desc", "ctx", _make_mock_reasoner(),
-        ) == "Mock output"
+    async def test_registered_in_patterns(self, tmp_path):
+        lead, coder, tester, reviewer = self._make_full_team()
+        members = [lead, coder, tester, reviewer]
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            result = await run_pattern(
+                "develop_test_review",
+                create_session("t1", [m.id for m in members],
+                               SessionRules(max_rounds=6)),
+                lead, members, "Task", "desc", "ctx", tmp_path,
+            )
+        assert result == "Mock output"
 
 
 class TestPatternResume:
     """Patterns must skip steps whose output is already in the session."""
 
-    def test_pair_review_lead_as_producer_skips_done_steps(self):
+    async def test_pair_review_lead_as_producer_skips_done_steps(self, tmp_path):
         lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
         reviewer = Person(id="rev", name="Reviewer", role="reviewer", identity="Rev.")
         session = create_session("t1", ["lead", "rev"],
@@ -337,15 +368,17 @@ class TestPatternResume:
         session.advance_round()
         session.add_message(Message(sender="rev", recipient="lead", kind="review", content="looks good"))
 
-        reasoner = _make_mock_reasoner()
-        output = run_pair_review(session, lead, [lead, reviewer], "T", "d", "c", reasoner)
-
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_pair_review(
+                session, lead, [lead, reviewer], "T", "d", "c", tmp_path,
+            )
         assert output == "Mock output"
         assert session.status == "complete"
         # Only the final revision step should have called think()
-        assert reasoner.think.call_count == 1
+        assert FakeAgent._think_count == 1
 
-    def test_lead_delegates_skips_members_already_done(self):
+    async def test_lead_delegates_skips_members_already_done(self, tmp_path):
         lead, coder, reviewer = _make_persons()
         session = create_session("t1", ["lead", "coder", "reviewer"],
                                  SessionRules(pattern="lead_delegates", max_rounds=5))
@@ -355,13 +388,15 @@ class TestPatternResume:
         session.advance_round()
         session.add_message(Message(sender="coder", recipient="lead", kind="result", content="code"))
 
-        reasoner = _make_mock_reasoner()
-        run_lead_delegates(session, lead, [lead, coder, reviewer], "T", "d", "c", reasoner)
-
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await run_lead_delegates(
+                session, lead, [lead, coder, reviewer], "T", "d", "c", tmp_path,
+            )
         # Only reviewer + lead synthesis should have called think() (not coder, not brief)
-        assert reasoner.think.call_count == 2
+        assert FakeAgent._think_count == 2
 
-    def test_fully_completed_session_returns_without_llm_calls(self):
+    async def test_fully_completed_session_returns_without_llm_calls(self, tmp_path):
         lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
         reviewer = Person(id="rev", name="Reviewer", role="reviewer", identity="Rev.")
         session = create_session("t1", ["lead", "rev"],
@@ -375,64 +410,12 @@ class TestPatternResume:
         session.add_message(Message(sender="lead", recipient="orchestrator", kind="result", content="final"))
         session.complete()
 
-        reasoner = _make_mock_reasoner()
-        output = run_pair_review(session, lead, [lead, reviewer], "T", "d", "c", reasoner)
-
-        reasoner.think.assert_not_called()
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            output = await run_pair_review(
+                session, lead, [lead, reviewer], "T", "d", "c", tmp_path,
+            )
+        assert FakeAgent._think_count == 0
         assert output == "final"
 
 
-class TestRateLimitRetry:
-    def test_rate_limit_retries_without_consuming_attempt_budget(self):
-        from aicompany.reasoner import LLMReasoner
-        from aicompany.models import Person
-        from aicompany.llm_backend import LLMRateLimitError
-        import aicompany.config as cfg
-
-        backend = MagicMock()
-        backend.call.side_effect = [
-            LLMRateLimitError("429"),
-            LLMRateLimitError("429"),
-            "final answer",
-        ]
-        reasoner = LLMReasoner(backend=backend)
-        person = Person(id="p", name="P", role="coder", identity="You.")
-
-        with patch("aicompany.reasoner.time.sleep"), \
-             patch.object(cfg, "LLM_RATE_LIMIT_MAX_RETRIES", 5), \
-             patch.object(cfg, "LLM_RETRY_ATTEMPTS", 3):
-            result = reasoner.think(person, [])
-
-        assert result == "final answer"
-        assert backend.call.call_count == 3  # 2 rate limits + 1 success
-
-    def test_rate_limit_fails_after_max_retries(self):
-        from aicompany.reasoner import LLMReasoner
-        from aicompany.models import Person
-        from aicompany.llm_backend import LLMRateLimitError
-        import aicompany.config as cfg
-
-        backend = MagicMock()
-        backend.call.side_effect = LLMRateLimitError("429 forever")
-        reasoner = LLMReasoner(backend=backend)
-        person = Person(id="p", name="P", role="coder", identity="You.")
-
-        with patch("aicompany.reasoner.time.sleep"), \
-             patch.object(cfg, "LLM_RATE_LIMIT_MAX_RETRIES", 2):
-            with pytest.raises(LLMRateLimitError):
-                reasoner.think(person, [])
-
-        assert backend.call.call_count == 3  # 2 max + 1 initial = 3 calls
-
-
-class TestAgentRules:
-    def test_without_workspace_returns_rules_unchanged(self):
-        from aicompany.communication import _agent_rules
-        assert _agent_rules("some rules", "") == "some rules"
-
-    def test_with_workspace_appends_instructions(self):
-        from aicompany.communication import _agent_rules
-        result = _agent_rules("rules text", "projects/proj_abc/src")
-        assert "projects/proj_abc/src" in result
-        assert "write_file" in result
-        assert "rules text" in result

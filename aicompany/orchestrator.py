@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import config, oversight, registry
 from .communication import create_session, run_pattern
 from .models import Plan, SessionRules, Task
-from .reasoner import create_reasoner
 
 
 class OrchestratorError(Exception):
@@ -41,11 +41,11 @@ def _topological_sort(tasks: list) -> list:
     return result
 
 
-def _build_project_context(plan: Plan, completed_ids: set, workspace: str = "",
+def _build_project_context(plan: Plan, completed_ids: set, workspace: Path,
                            task: Task | None = None) -> str:
     """
     Minimal context for a task: tech stack, workspace, and the task's own requirements.
-    No project history, no completed task list — agents discover what they need via tools.
+    No project history — agents discover what they need via tools.
     """
     lines = [f"**Project**: {plan.title}", f"**Tech stack**: {', '.join(plan.tech_stack)}"]
     if task and task.depends_on:
@@ -84,10 +84,6 @@ def _find_prior_output(plan: Plan, task: Task) -> str | None:
 def _handle_checkpoint(
     task: Task, prior_output: str | None, project_id: str, plan: Plan,
 ) -> str:
-    """
-    Run the human checkpoint gate. Returns 'approved', 'rejected', or 'modified'.
-    On 'modified', appends the user override to task.input.specification.
-    """
     action, modified = oversight.checkpoint(task, prior_output, project_id)
     registry.save_decision(project_id, task.id, {
         "action": action,
@@ -106,8 +102,8 @@ def _handle_checkpoint(
     return action
 
 
-def _execute_subtask_plan(
-    sub_plan: Plan, completed_ids: set, workspace: str, project_id: str,
+async def _execute_subtask_plan(
+    sub_plan: Plan, completed_ids: set, workspace: Path, project_id: str,
 ) -> str:
     """Recursively execute sub-tasks inside a composite task plan."""
     sorted_subs = _topological_sort(sub_plan.tasks)
@@ -117,7 +113,7 @@ def _execute_subtask_plan(
         if any(dep not in sub_done for dep in sub.depends_on):
             sub.status = "failed"
             continue
-        sub_output = _execute_task(sub, sub_plan, sub_done, workspace, project_id)
+        sub_output = await _execute_task(sub, sub_plan, sub_done, workspace, project_id)
         registry.save_output(project_id, sub.id, sub_output)
         sub.status = "done"
         sub_done.add(sub.id)
@@ -130,21 +126,19 @@ def _log(project_id: str, task_id: str, level: str, message: str) -> None:
     registry.append_task_log(project_id, task_id, level, message)
 
 
-def _execute_task(
-    task: Task, plan: Plan, completed_ids: set, workspace: str, project_id: str,
+async def _execute_task(
+    task: Task, plan: Plan, completed_ids: set, workspace: Path, project_id: str,
 ) -> str:
     """Load team, build context, run communication pattern. Returns output text."""
     if task.plan.has_subtasks:
-        return _execute_subtask_plan(task.plan, completed_ids, workspace, project_id)
+        return await _execute_subtask_plan(task.plan, completed_ids, workspace, project_id)
 
     team, lead, members, skill_registry = registry.load_team_with_members(task.assigned_team)
     rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
 
-    # Resume from a partial session saved by a previous failed run, or start fresh.
     existing = registry.load_session(project_id, task.id)
     session = existing if existing else create_session(task.id, [p.id for p in members], rules)
 
-    # Save session to disk after every message so a retry can resume mid-task.
     orig_add = session.add_message
     def _add_and_save(msg):
         result = orig_add(msg)
@@ -153,34 +147,32 @@ def _execute_task(
     session.add_message = _add_and_save
 
     context = _build_project_context(plan, completed_ids, workspace, task)
-    reasoner = create_reasoner()
-    reasoner.setup(members, skill_registry)
 
     resuming = existing is not None and len(existing.messages) > 0
     registry.append_task_log(project_id, task.id, "INFO",
                              f"team={task.assigned_team} pattern={rules.pattern} "
-                             f"max_rounds={rules.max_rounds} members={[p.id for p in members]}"
+                             f"members={[p.id for p in members]}"
                              + (" [RESUMING]" if resuming else ""))
 
     def _on_status(msg: str) -> None:
         print(f"    → {msg}")
         registry.append_task_log(project_id, task.id, "INFO", f"→ {msg}")
 
-    output = run_pattern(
+    output = await run_pattern(
         pattern_name=rules.pattern,
         session=session, lead=lead, members=members,
         task_title=task.title,
         task_description=task.input.specification,
         project_context=context,
-        reasoner=reasoner, skill_registry=skill_registry,
-        on_status=_on_status,
         workspace=workspace,
+        skill_registry=skill_registry,
+        on_status=_on_status,
     )
     registry.save_session(project_id, session)
     return output
 
 
-def run_project(project_id: str, dry_run: bool = False) -> None:
+async def run_project(project_id: str, dry_run: bool = False) -> None:
     plan = registry.load_plan(project_id)
 
     if plan.status == "complete":
@@ -190,8 +182,8 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
     plan.status = "running"
     registry.save_plan(plan)
 
-    workspace = f"projects/{project_id}/src"
-    (config.PROJECTS_DIR / project_id / "src").mkdir(parents=True, exist_ok=True)
+    workspace = config.PROJECTS_DIR / project_id / "src"
+    workspace.mkdir(parents=True, exist_ok=True)
 
     sorted_tasks = _topological_sort(plan.tasks)
     completed_ids = {t.id for t in plan.tasks if t.status == "done"}
@@ -207,9 +199,8 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
 
         if any(dep in failed_ids for dep in task.depends_on):
             failed_deps = [d for d in task.depends_on if d in failed_ids]
-            msg = f"skipped — dependency failed: {failed_deps}"
             print(f"  [skip] {task.id}: dependency failed or was rejected")
-            _tlog(task.id, "SKIP", msg)
+            _tlog(task.id, "SKIP", f"skipped — dependency failed: {failed_deps}")
             task.status = "failed"
             failed_ids.add(task.id)
             registry.save_plan(plan)
@@ -246,7 +237,7 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
             lambda level, msg, _tid=task.id: _tlog(_tid, level, msg)
         )
         try:
-            output = _execute_task(task, plan, completed_ids, workspace, project_id)
+            output = await _execute_task(task, plan, completed_ids, workspace, project_id)
         except Exception as exc:
             _tlog(task.id, "ERROR", f"{type(exc).__name__}: {exc}")
             task.status = "failed"

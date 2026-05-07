@@ -12,12 +12,8 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 ## Environment
 
 - Python 3.10, virtualenv at `.venv/` — always prefix Python commands with `.venv/bin/`
-- `AICOMPANY_LLM_BACKEND` — optional, defaults to `anthropic` (pluggable: any backend implementing `LLMBackend` protocol)
 - `AICOMPANY_MODEL` — optional, defaults to `claude-sonnet-4-6`
-- `ANTHROPIC_API_KEY` — required when using the `anthropic` backend
-- `AICOMPANY_MCP_SERVERS` — optional, enables remote server-side MCP (Anthropic beta). Not needed for normal use — tools run locally by default.
-  - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]`
-  - See `scripts/start_mcp.sh` and `docs/09-mcp-server.md` for setup when needed
+- No API key needed in environment — all LLM calls go through the `claude` CLI (Claude Code's own auth)
 
 ---
 
@@ -29,7 +25,7 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 
 # The ./mycomp wrapper auto-creates .venv and installs deps on first run
 ./mycomp init                                    # Bootstrap company (run once)
-./mycomp new-project path/to/requirements.md     # Evaluate + plan a project
+./mycomp new-project path/to/requirements.md     # Plan a project (CTO + HR via agents)
 ./mycomp run --dry-run <project-id>              # Preview tasks (no LLM calls)
 ./mycomp run <project-id>                        # Execute project
 ./mycomp retry <project-id>                      # Reset failed tasks and re-run
@@ -58,7 +54,7 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 mycomp              shell entry-point wrapper — auto-creates .venv, then delegates to main.py
 .env.example        env var reference (copy to .env and fill in secrets)
 aicompany/          core package
-  config.py         paths + env vars + backend selection
+  config.py         paths, MODEL env var, MIN_REQUIREMENTS_LENGTH, task_log ContextVar
   models/           data models — split by domain (all re-exported from models/__init__.py):
     org.py          Skill, Person, Team, CompanyState, build_prompt
     project.py      TaskInput(specification, context), Task, Plan (alias: ProjectPlan), MAX_PLAN_DEPTH
@@ -67,29 +63,38 @@ aicompany/          core package
                     True → composite; to_dict/from_dict depth-bounded at MAX_PLAN_DEPTH=20
     requirements.py SubRequirement, Requirement, RequirementTest, RequirementTestSuite, RequirementsEvaluation
     session.py      Message, SessionRules, Session
-  llm_backend.py    LLMBackend protocol (transport) + Reasoner protocol (agent brain, with setup() + think())
-  reasoner.py       LLMReasoner + create_reasoner() factory + build_system_prompt() / build_user_prompt() helpers
-  backends/         provider implementations (anthropic, openai, fake, chat_session). chat_session_backend also contains ChatSessionReasoner
-  communication.py  create_session, run_pattern (dispatches to patterns.py). Re-exports pattern functions.
-  patterns.py       Pattern implementations: run_lead_delegates, run_pair_review, run_develop_test_review.
-                    _members_by_role helper. _agent_rules session+workspace rule builder.
-  llm.py            stateless LLM calls (evaluation, autofix, HR). Prompts from prompts/. extract_json_block() utility.
-  prompts/          eval_system.txt, autofix_system.txt, cto_system.txt, hr_system.txt
-  evaluation.py     Requirements quality gate: EvaluationResult, evaluate_and_gate, autofix_requirements
-  planning.py       CTO planning + HR team creation + project assembly: PlanResult, plan_and_create_project
-                    Helpers: _run_cto_planning, _create_missing_teams, _update_technologies, _assemble_project
+  person_agent.py   PersonAgent: wraps ClaudeSDKClient (claude-code-sdk). One persistent Claude Code process per
+                    person per task. Agents keep context across their turns (lead remembers brief when synthesizing,
+                    coder remembers implementation when revising). Uses permission_mode="bypassPermissions".
+  communication.py  create_session, run_pattern (async, dispatches to patterns.py). Re-exports pattern functions.
+  patterns.py       Async pattern implementations: run_lead_delegates, run_pair_review, run_develop_test_review.
+                    Each person gets a PersonAgent; multi-turn persons (lead, coder) keep their process alive.
+  evaluation.py     Requirements quality gate using claude-code-sdk query() (one-shot, no persistent process).
+                    evaluate_requirements(text) → RequirementsEvaluation: scores + verdict against company policy.
+                    evaluate_sub_requirements(subs) → list[SubRequirementEvaluation]: batch check after CTO planning.
+                    load_policy(): reads company/requirements_policy.md (seeded on init, editable per-company).
+                    extract_json_block(): shared JSON parsing utility (also imported by planning.py).
+  planning.py       async CTO planning + HR team creation + project assembly: PlanResult, plan_and_create_project (async)
+                    _run_cto_planning: CTO team via run_pattern (PersonAgent pair_review)
+                    _hr_create_team: one-shot SDK query() with embedded HR system prompt → JSON team definition
+                    Calls evaluate_sub_requirements() after CTO output to check generated sub-requirements.
   seeds.py          CTO team (cto + cto_analyst) + shared skills (incl. testing). All dev teams created by HR on demand.
+                    default_requirements_policy(): default policy text written to company/requirements_policy.md on init.
   registry.py       all YAML file I/O. _load_yaml/_save_yaml helpers. save_* auto-registers in state.yaml.
                     Also: save/load requirements, RequirementTestSuites, RequirementTests.
-  orchestrator.py   execution loop + topological sort. _handle_checkpoint, _execute_task, _build_project_context
-                    _execute_subtask_plan (recursive sub-task execution), _find_prior_output (all dep outputs)
+  orchestrator.py   async execution loop + topological sort. _handle_checkpoint, _execute_task (async),
+                    run_project (async, called via asyncio.run() from CLI), _execute_subtask_plan, _find_prior_output
   oversight.py      human checkpoint UI: _display_task, _prompt_decision, checkpoint()
   validation.py     input validation: validate_requirements_text (delegates to TaskInput.validate()),
                     validate_cto_plan (decomposed into _validate_plan_structure, _validate_tasks,
                     _validate_task_dependencies), validate_hr_response. PATTERN_ROLES set for role validation.
   cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
-  mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 290 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+                    cmd_new_project: evaluates requirements (rejects on policy violations), then plans.
+                    cmd_init: seeds policy file (company/requirements_policy.md) on first run.
+tests/              pytest suite — 237 tests, all mocked (no API key needed).
+                    Async tests use pytest-asyncio (asyncio_mode=auto in pytest.ini).
+                    Pattern/orchestrator tests mock PersonAgent via FakePersonAgent.
+                    planning/cli tests use AsyncMock for _run_cto_planning, _hr_create_team, run_project.
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
                     README.md — navigation index for all docs
                     01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams
@@ -103,7 +108,7 @@ projects/           runtime project data — gitignored
   <project_id>/
     plan.yaml           project plan + task statuses + embedded requirements
     requirements.md     original requirements text
-    src/                live source files written by agents via MCP
+    src/                live source files written by agents (Claude Code cwd for all PersonAgents)
     outputs/            one .md per task — final agent output
     sessions/           one .json per task — full message log
     decisions/          human checkpoint decisions
@@ -134,7 +139,6 @@ projects/           runtime project data — gitignored
 - `evaluation.py` owns the requirements quality gate; `planning.py` owns CTO planning, HR team creation, project assembly
 - `seeds.py` owns default data definitions — pure data, no I/O
 - `cli.py` is a thin UI layer — delegates to `evaluation.py`, `planning.py`, and `orchestrator.py`
-- No hardcoded provider imports outside `backends/`
 - No new dependencies without updating `requirements.txt` and `system-deps.txt`
 - When adding a new module, add corresponding tests in `tests/`
 
@@ -168,12 +172,10 @@ All tests are fully isolated — `conftest.py` redirects all config paths to `tm
    - `models/` — pure data only. No I/O, no API calls, no imports from other aicompany modules (except within the package itself).
    - `registry.py` — the ONLY module that reads/writes files. Note: save_* auto-registers in state.yaml.
    - `llm.py` — stateless LLM calls. Prompts live in `prompts/*.txt`.
-   - `llm_backend.py` — protocol definition only. No business logic.
-   - `reasoner.py` — LLMReasoner + shared prompt-builder helpers. `ChatSessionReasoner` lives in `backends/chat_session_backend.py`. Uses LLMBackend, never concrete providers.
-   - `backends/` — provider implementations. Each must call `register_backend()`.
-   - `evaluation.py` — requirements quality gate only. No team/project creation.
+   - `person_agent.py` — PersonAgent (one ClaudeSDKClient per person per task). No direct LLM calls.
+      - `planning.py` — CTO planning, HR creation, project assembly. No CLI/UI code.
    - `planning.py` — CTO planning, HR team creation, project assembly. No UI/CLI code.
-   - `patterns.py` — communication pattern implementations. No direct LLM or file I/O.
+   - `patterns.py` — async communication pattern implementations. Creates PersonAgent instances. No direct LLM calls or file I/O.
    - `communication.py` — session creation and pattern dispatch only.
    - `seeds.py` — default data definitions. Pure data, no I/O.
    - `validation.py` — pure validation logic. No I/O, no LLM calls.
@@ -209,10 +211,12 @@ All tests are fully isolated — `conftest.py` redirects all config paths to `tm
 ### Things You Must NEVER Do
 
 - ❌ Add business logic to `main.py` — it's just the CLI entrypoint
-- ❌ Import provider SDKs in `llm.py` — use the backend abstraction
+- ❌ Add direct API calls anywhere — all LLM goes through PersonAgent (patterns) or SDK query() (planning)
+- ❌ Import `anthropic` — it is no longer a dependency
 - ❌ Skip tests — if you can't test it, don't ship it
 - ❌ Commit runtime artifacts (`company/`, `projects/`, `reqs*.md`)
 - ❌ Add dependencies without updating `requirements.txt` and `system-deps.txt`
 - ❌ Make changes without reading this file first
 - ❌ Leave documentation out of date after a change
+- ❌ Ask the user to validate something you can validate yourself — run tests, check binaries, verify commands, read files. Do it.
 

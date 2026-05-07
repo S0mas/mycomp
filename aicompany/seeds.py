@@ -47,6 +47,64 @@ Output ONLY a ```json block with EXACTLY this schema — no prose before or afte
 ```'''
 
 
+def default_requirements_policy() -> str:
+    """Return the default requirements policy written to company/requirements_policy.md on init."""
+    return """\
+# Requirements Policy
+
+This policy defines what makes a requirement acceptable for planning and implementation.
+Edit this file to match your project standards — it is loaded by the evaluator for every review.
+
+---
+
+## Mandatory elements
+
+Every requirement (top-level and sub-requirement) MUST have:
+
+1. **A clear description** — state what the system must do, not how.
+2. **Acceptance criteria** — at least one testable condition per sub-requirement.
+   Write criteria in Given/When/Then format where applicable.
+3. **Defined scope** — implementable by a single team in a single session.
+   If a requirement spans multiple teams or months, it must be decomposed further.
+
+---
+
+## Clarity rules
+
+- Use precise, unambiguous language. Avoid: "fast", "user-friendly", "scalable", "handle many".
+- Quantify where possible: "response time < 200ms at p95", "support 500 concurrent users".
+- Name specific actors: "authenticated user", "admin", "background job" — not "the system" or "users".
+
+---
+
+## Completeness rules
+
+- Every happy path must have a corresponding error/failure path defined.
+- Authentication, authorisation, and data ownership must be specified where they apply.
+- External dependencies (third-party APIs, queues, storage) must be named explicitly.
+
+---
+
+## Feasibility rules
+
+- Requirements must be achievable with the stated tech stack.
+- No requirement may depend on an undefined or unavailable external system.
+- Scope must be realistic for a single session; unrealistic scope is a policy violation.
+
+---
+
+## Automatic rejection triggers
+
+Any of the following cause an automatic **reject** verdict:
+
+- Fewer than 3 acceptance criteria across the entire submission.
+- Acceptance criteria written as "it works" or "no errors".
+- Requirements that describe UI aesthetics only, with no functional behaviour.
+- Scope that would require more than one full sprint to implement.
+- Missing actor: no statement of who performs or benefits from the requirement.
+"""
+
+
 def default_skills() -> list[Skill]:
     """Return the starter set of shared skills."""
     return [
@@ -143,7 +201,8 @@ def default_teams() -> list[tuple[list[Person], Team]]:
             "Decompose every big requirement into specific, testable sub-requirements",
             "Every sub-requirement must have concrete acceptance_criteria",
             "Every task must reference the sub-requirement IDs it implements via requirement_ids",
-            "Keep tasks focused: one team, one session, 4–10 tasks total",
+            "Keep tasks focused: one team, one session, one clear deliverable (code, config, deployment, etc.),",
+            "if not possible then those need to be further split into multiple tasks",
         ],
         rules=[
             "Output ONLY a ```json block — no prose before or after" + _CTO_JSON_SCHEMA,

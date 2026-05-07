@@ -112,14 +112,15 @@ class RequirementTestSuite:
 
 @dataclass
 class RequirementsEvaluation:
-    """Structured assessment of a requirements document before planning."""
+    """Structured assessment of a requirements document against company policy."""
     clarity: int
     completeness: int
     feasibility: int
+    violations: list = field(default_factory=list)  # explicit policy violations
     risks: list = field(default_factory=list)
     suggestions: list = field(default_factory=list)
     summary: str = ""
-    verdict: str = "proceed"
+    verdict: str = "proceed"  # proceed | needs_work | reject
 
     @classmethod
     def from_dict(cls, d: dict) -> RequirementsEvaluation:
@@ -127,6 +128,7 @@ class RequirementsEvaluation:
             clarity=d.get("clarity", 3),
             completeness=d.get("completeness", 3),
             feasibility=d.get("feasibility", 3),
+            violations=d.get("violations", d.get("policy_violations", [])),
             risks=d.get("risks", []),
             suggestions=d.get("suggestions", []),
             summary=d.get("summary", ""),

@@ -1,13 +1,14 @@
+import asyncio
 from pathlib import Path
 
 import click
 
 from . import config, orchestrator, registry
-from .models import CompanyState, Person, RequirementsEvaluation, Skill, Team
-from .seeds import default_skills, default_teams
+from .models import CompanyState, Person, Skill, Team
+from .seeds import default_skills, default_teams, default_requirements_policy
 from .validation import validate_requirements_text
-from .evaluation import autofix_requirements, evaluate_and_gate
 from .planning import plan_and_create_project
+from .evaluation import evaluate_requirements
 
 
 def _print_ok(msg: str) -> None:
@@ -58,112 +59,62 @@ def cmd_init():
         member_roles = " + ".join(p.role for p in persons)
         _print_ok(f"Created {team.id} ({member_roles})")
 
+    policy_file = config.REQUIREMENTS_POLICY_FILE
+    policy_file.write_text(default_requirements_policy(), encoding="utf-8")
+    _print_ok(f"Created requirements policy: {policy_file.relative_to(config.BASE_DIR)}")
+
     click.echo()
-    _print_ok("Company ready. Configure your LLM backend and run:")
+    _print_ok("Company ready. Run:")
     click.echo("    python main.py new-project <requirements.md>")
 
 
 # ── new-project ────────────────────────────────────────────────────────────────
 
-def _score_color(score: int) -> str:
-    if score >= 4:
-        return "green"
-    elif score >= 3:
-        return "yellow"
-    return "red"
-
-
-def _print_evaluation(ev: RequirementsEvaluation) -> None:
-    click.echo()
-    click.echo(click.style("  ── Requirements Evaluation ──", bold=True))
-    for label, score in [("Clarity", ev.clarity), ("Completeness", ev.completeness), ("Feasibility", ev.feasibility)]:
-        bar = "█" * score + "░" * (5 - score)
-        click.echo(click.style(f"  {label:>14}: {bar} {score}/5", fg=_score_color(score)))
-    click.echo(click.style(f"  {'Overall':>14}: {ev.overall_score:.1f}/5", bold=True))
-    click.echo()
-    click.echo(f"  Summary: {ev.summary}")
-    if ev.has_risks:
-        click.echo(click.style("  Risks:", fg="yellow"))
-        for r in ev.risks:
-            click.echo(click.style(f"    • {r}", fg="yellow"))
-    if ev.suggestions:
-        click.echo(click.style("  Suggestions:", fg="cyan"))
-        for s in ev.suggestions:
-            click.echo(click.style(f"    • {s}", fg="cyan"))
-    verdict_color = {"proceed": "green", "needs_work": "yellow", "reject": "red"}.get(ev.verdict, "white")
-    click.echo(click.style(f"  Verdict: {ev.verdict.upper()}", fg=verdict_color, bold=True))
-
-
 @click.command("new-project")
 @click.argument("requirements_file", type=click.Path(exists=True))
 def cmd_new_project(requirements_file: str):
-    """Analyse a requirements file, build teams, and create a project plan."""
-    req_path = Path(requirements_file)
-    requirements_text = req_path.read_text(encoding="utf-8")
+    """Analyse requirements, build teams, and create a project plan."""
+    requirements_text = Path(requirements_file).read_text(encoding="utf-8")
 
-    # ── Sanity checks ─────────────────────────────────────────────────────────
     errors = validate_requirements_text(requirements_text)
     if errors:
         for e in errors:
             _print_err(e)
         raise SystemExit(1)
 
-    click.echo(f"\nAnalysing requirements: {req_path.name}")
+    click.echo(f"\nPlanning project from: {Path(requirements_file).name}")
 
-    # ── Evaluate requirements ─────────────────────────────────────────────────
-    click.echo("  → Evaluating requirements quality...")
-    result = evaluate_and_gate(requirements_text)
-    _print_evaluation(result.evaluation)
-
-    # ── Hard block on critical gaps ───────────────────────────────────────────
-    if result.blocked:
-        click.echo()
-        _print_err("Cannot proceed — critical gaps in requirements:")
-        for b in result.blockers:
-            click.echo()
-            _print_err(f"  • {b}")
-
-        if result.evaluation.has_risks:
-            click.echo()
-            _print_warn("Identified risks:")
-            for r in result.evaluation.risks:
-                _print_warn(f"    ‣ {r}")
-
-        if result.evaluation.suggestions:
-            click.echo()
-            _print_info("Suggestions from evaluation:")
-            for s in result.evaluation.suggestions:
-                _print_info(f"    ‣ {s}")
-
-        # ── Offer autofix ─────────────────────────────────────────────────────
-        click.echo()
-        if click.confirm(click.style(
-            "Would you like AI to auto-fix the requirements?", fg="cyan"
-        )):
-            click.echo("  → Generating improved requirements...")
-            fixed_text = autofix_requirements(
-                requirements_text, result.evaluation.to_dict(),
-            )
-            fixed_path = req_path.with_stem(req_path.stem + "_fixed")
-            fixed_path.write_text(fixed_text, encoding="utf-8")
-            click.echo()
-            _print_ok(f"Improved requirements saved to: {fixed_path}")
-            _print_info("Review the file, then re-run:")
-            _print_info(f"    python main.py new-project {fixed_path}")
+    async def _run():
+        click.echo("  → Evaluating requirements against company policy...")
+        eval_result = await evaluate_requirements(requirements_text)
+        if eval_result.verdict == "reject":
+            _print_err(f"Requirements rejected (clarity={eval_result.clarity}, "
+                       f"completeness={eval_result.completeness}, "
+                       f"feasibility={eval_result.feasibility})")
+            if eval_result.violations:
+                _print_err("Policy violations:")
+                for v in eval_result.violations:
+                    _print_err(f"  • {v}")
+            if eval_result.suggestions:
+                click.echo("Suggestions:")
+                for s in eval_result.suggestions:
+                    click.echo(f"  • {s}")
+            raise SystemExit(1)
+        elif eval_result.verdict == "needs_work":
+            _print_warn(f"Requirements need improvement: {eval_result.summary}")
+            if eval_result.suggestions:
+                for s in eval_result.suggestions:
+                    _print_warn(f"  • {s}")
+            _print_warn("Proceeding anyway — consider revising before running.")
         else:
-            click.echo()
-            _print_info(f"Fix the requirements manually and re-run:")
-            _print_info(f"    python main.py new-project {requirements_file}")
+            _print_ok(f"Requirements approved: {eval_result.summary}")
 
-        raise SystemExit(1)
+        return await plan_and_create_project(
+            requirements_text,
+            on_status=lambda msg: click.echo(f"  → {msg}"),
+        )
 
-    _print_ok("Requirements passed evaluation — proceeding.")
-
-    # ── CTO planning + HR + project creation ──────────────────────────────────
-    plan_result = plan_and_create_project(
-        requirements_text,
-        on_status=lambda msg: click.echo(f"  → {msg}"),
-    )
+    plan_result = asyncio.run(_run())
 
     if plan_result.plan_warnings:
         _print_warn("CTO plan has issues:")
@@ -197,15 +148,13 @@ def cmd_new_project(requirements_file: str):
 
 # ── run ────────────────────────────────────────────────────────────────────────
 
-
-
 @click.command("run")
 @click.argument("project_id")
-@click.option("--dry-run", is_flag=True, help="Print each task (id, title, team, deps) that would run — no LLM calls or file writes.")
+@click.option("--dry-run", is_flag=True, help="Print tasks that would run — no agent calls.")
 def cmd_run(project_id: str, dry_run: bool):
     """Execute a project's task plan (with human checkpoints)."""
     try:
-        orchestrator.run_project(project_id, dry_run=dry_run)
+        asyncio.run(orchestrator.run_project(project_id, dry_run=dry_run))
     except orchestrator.OrchestratorError as e:
         _print_err(str(e))
         raise SystemExit(1)
@@ -258,7 +207,7 @@ def cmd_retry(project_id: str):
     _print_ok(f"Reset {len(failed)} failed task(s) to pending: {', '.join(t.id for t in failed)}")
 
     try:
-        orchestrator.run_project(project_id)
+        asyncio.run(orchestrator.run_project(project_id))
     except orchestrator.OrchestratorError as e:
         _print_err(str(e))
         raise SystemExit(1)
@@ -360,11 +309,9 @@ def cmd_purge(purge_all: bool):
 def cli():
     """AI Company — an AI-driven end-to-end software development workflow.
 
-    Typical flow:
-
     \b
       ./mycomp init                        Bootstrap company state (run once)
-      ./mycomp new-project <req.md>        Evaluate requirements, build teams, create plan
+      ./mycomp new-project <req.md>        Build teams and create project plan
       ./mycomp run <project-id>            Execute the plan (human checkpoints included)
       ./mycomp retry <project-id>          Reset failed tasks and re-run
       ./mycomp status [project-id]         Check task progress
