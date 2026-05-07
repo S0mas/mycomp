@@ -178,12 +178,6 @@ def run_project(project_id: str, dry_run: bool = False) -> None:
         print(f"Project {project_id} is already complete.")
         return
 
-    if not config.MCP_SERVERS and not dry_run:
-        raise RuntimeError(
-            "MCP server required for project execution. "
-            "Start one with ./scripts/start_mcp.sh and set AICOMPANY_MCP_SERVERS."
-        )
-
     plan.status = "running"
     registry.save_plan(plan)
 

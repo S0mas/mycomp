@@ -295,30 +295,11 @@ def _auto_mcp_context():
 @click.option("--dry-run", is_flag=True, help="Print each task (id, title, team, deps) that would run — no LLM calls or file writes.")
 def cmd_run(project_id: str, dry_run: bool):
     """Execute a project's task plan (with human checkpoints)."""
-    if dry_run:
-        try:
-            orchestrator.run_project(project_id, dry_run=True)
-        except orchestrator.OrchestratorError as e:
-            _print_err(str(e))
-            raise SystemExit(1)
-        return
-
-    def _run():
-        try:
-            orchestrator.run_project(project_id)
-        except orchestrator.OrchestratorError as e:
-            _print_err(str(e))
-            raise SystemExit(1)
-
-    if config.MCP_SERVERS:
-        _run()
-    else:
-        try:
-            with _auto_mcp_context():
-                _run()
-        except RuntimeError as e:
-            _print_err(str(e))
-            raise SystemExit(1)
+    try:
+        orchestrator.run_project(project_id, dry_run=dry_run)
+    except orchestrator.OrchestratorError as e:
+        _print_err(str(e))
+        raise SystemExit(1)
 
 
 # ── fail ───────────────────────────────────────────────────────────────────────
@@ -367,22 +348,11 @@ def cmd_retry(project_id: str):
     registry.save_plan(plan)
     _print_ok(f"Reset {len(failed)} failed task(s) to pending: {', '.join(t.id for t in failed)}")
 
-    def _run():
-        try:
-            orchestrator.run_project(project_id)
-        except orchestrator.OrchestratorError as e:
-            _print_err(str(e))
-            raise SystemExit(1)
-
-    if config.MCP_SERVERS:
-        _run()
-    else:
-        try:
-            with _auto_mcp_context():
-                _run()
-        except RuntimeError as e:
-            _print_err(str(e))
-            raise SystemExit(1)
+    try:
+        orchestrator.run_project(project_id)
+    except orchestrator.OrchestratorError as e:
+        _print_err(str(e))
+        raise SystemExit(1)
 
 
 # ── status ─────────────────────────────────────────────────────────────────────

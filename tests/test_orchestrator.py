@@ -120,14 +120,10 @@ class TestRunProjectDryRun:
 
 
 class TestRunProjectExecution:
-    def _run_with_mocks(self, project_id, oversight_action="approved", monkeypatch=None):
+    def _run_with_mocks(self, project_id, oversight_action="approved"):
         mock_reasoner = _make_mock_reasoner()
-        if monkeypatch is not None:
-            monkeypatch.setattr(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}])
         with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
-             patch("aicompany.orchestrator.oversight") as mock_oversight, \
-             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
-
+             patch("aicompany.orchestrator.oversight") as mock_oversight:
             mock_oversight.checkpoint.return_value = (oversight_action, "")
             orchestrator.run_project(project_id)
             return mock_reasoner, mock_oversight
@@ -187,12 +183,6 @@ class TestRunProjectExecution:
         self._run_with_mocks(sample_plan.project_id)
         assert (config.PROJECTS_DIR / sample_plan.project_id / "src").exists()
 
-    def test_raises_without_mcp(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
-        _setup(sample_state, sample_team, sample_plan, sample_persons, sample_skills)
-        with patch.object(config, "MCP_SERVERS", []):
-            with pytest.raises(RuntimeError, match="MCP server required"):
-                orchestrator.run_project(sample_plan.project_id)
-
     def test_already_done_tasks_skipped(self, sample_state, sample_team, sample_plan, sample_persons, sample_skills):
         sample_plan.tasks[0].status = "done"
         write_plan(sample_plan)
@@ -203,8 +193,7 @@ class TestRunProjectExecution:
 
         mock_reasoner = _make_mock_reasoner()
         with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
-             patch("aicompany.orchestrator.oversight") as mock_oversight, \
-             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
+             patch("aicompany.orchestrator.oversight") as mock_oversight:
             mock_oversight.checkpoint.return_value = ("approved", "")
             orchestrator.run_project(sample_plan.project_id)
 
@@ -225,8 +214,7 @@ class TestRunProjectExecution:
         mock_reasoner = MagicMock()
         mock_reasoner.think.side_effect = Exception("API timeout")
         with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
-             patch("aicompany.orchestrator.oversight") as mock_oversight, \
-             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
+             patch("aicompany.orchestrator.oversight") as mock_oversight:
             mock_oversight.checkpoint.return_value = ("approved", "")
             with pytest.raises(OrchestratorError, match="API timeout"):
                 orchestrator.run_project(sample_plan.project_id)
@@ -316,8 +304,7 @@ class TestNestedSubtaskExecution:
         write_plan(plan)
 
         mock_reasoner = _make_mock_reasoner()
-        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
-             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner):
             orchestrator.run_project("proj_nested")
 
         out1 = registry.load_output("proj_nested", "sub_001")
@@ -358,8 +345,7 @@ class TestNestedSubtaskExecution:
         write_plan(plan)
 
         mock_reasoner = _make_mock_reasoner()
-        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner), \
-             patch.object(config, "MCP_SERVERS", [{"type": "url", "url": "http://fake", "name": "test"}]):
+        with patch("aicompany.orchestrator.create_reasoner", return_value=mock_reasoner):
             orchestrator.run_project("proj_agg")
 
         parent_output = registry.load_output("proj_agg", "task_001")
