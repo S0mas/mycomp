@@ -12,7 +12,7 @@ SKILLS_DIR = COMPANY_DIR / "skills"
 PROJECTS_DIR = BASE_DIR / "projects"
 
 MODEL = os.environ.get("AICOMPANY_MODEL", "claude-sonnet-4-6")
-LLM_BACKEND = os.environ.get("AICOMPANY_LLM_BACKEND", "anthropic")
+LLM_BACKEND = os.environ.get("AICOMPANY_LLM_BACKEND", "claude_cli")
 MCP_SERVERS: list[dict] = json.loads(os.environ.get("AICOMPANY_MCP_SERVERS", "[]"))
 
 MAX_TOKENS_CTO = 4096

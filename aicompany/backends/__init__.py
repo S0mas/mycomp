@@ -15,3 +15,4 @@ except ImportError:
 
 from . import fake_backend  # noqa: F401  — always available, no dependencies
 from . import chat_session_backend  # noqa: F401  — always available, no dependencies
+from . import claude_cli_backend  # noqa: F401  — always available (requires claude in PATH)
