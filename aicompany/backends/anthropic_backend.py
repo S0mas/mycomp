@@ -82,6 +82,19 @@ _TOOLS = [
 ]
 
 
+# ── Tool call log formatting ──────────────────────────────────────────────────
+
+def _format_tool_call(name: str, inputs: dict) -> str:
+    """Compact log representation — never dumps large content fields."""
+    safe = {}
+    for k, v in inputs.items():
+        if isinstance(v, str) and len(v) > 80:
+            safe[k] = f"<{len(v)} chars>"
+        else:
+            safe[k] = v
+    return f"{name}({safe})"
+
+
 # ── Local tool execution ──────────────────────────────────────────────────────
 
 def _safe_path(rel: str) -> Path:
@@ -248,9 +261,9 @@ class AnthropicBackend:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    _log("TOOL", f"{block.name}({block.input})")
+                    _log("TOOL", _format_tool_call(block.name, block.input))
                     result = _execute_tool(block.name, block.input)
-                    _log("TOOL", f"{block.name} → {result[:120]}{'...' if len(result) > 120 else ''}")
+                    _log("TOOL", f"{block.name} → {result[:200]}{'...' if len(result) > 200 else ''}")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
