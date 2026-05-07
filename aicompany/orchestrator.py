@@ -44,19 +44,10 @@ def _topological_sort(tasks: list) -> list:
 def _build_project_context(plan: Plan, completed_ids: set, workspace: str = "",
                            task: Task | None = None) -> str:
     """
-    Assemble runtime execution context for a task.
-    Parent context (baked in at planning time) comes from task.input.context.
-    Requirements come from task.plan.requirements — no parent plan lookup needed.
+    Minimal context for a task: tech stack, workspace, and the task's own requirements.
+    No project history, no completed task list — agents discover what they need via tools.
     """
-    lines = []
-    if task and task.input.context:
-        lines.append(task.input.context)
-        lines.append("")
-
-    done_titles = [t.title for t in plan.tasks if t.id in completed_ids]
-    lines += [f"**Project**: {plan.title}", f"**Tech stack**: {', '.join(plan.tech_stack)}"]
-    if done_titles:
-        lines.append(f"**Completed tasks**: {', '.join(done_titles)}")
+    lines = [f"**Tech stack**: {', '.join(plan.tech_stack)}"]
     if workspace:
         lines.append(f"**Workspace**: `{workspace}`")
 
