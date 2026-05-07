@@ -35,5 +35,5 @@ LLM_RATE_LIMIT_MAX_RETRIES: int = int(os.environ.get("AICOMPANY_LLM_RATE_LIMIT_M
 task_log: ContextVar = ContextVar("task_log", default=None)
 
 # Timeouts are defined in anthropic_backend.py and read from env there:
-#   AICOMPANY_API_TIMEOUT      — plain calls, default 120s
-#   AICOMPANY_API_TIMEOUT_MCP  — MCP calls (many tool round-trips), default 300s
+#   AICOMPANY_API_TIMEOUT      — plain API calls (no tools), default 120s
+#   AICOMPANY_API_TIMEOUT_MCP  — remote server-side MCP calls, default 300s

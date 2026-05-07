@@ -15,11 +15,9 @@ AI-driven SDLC orchestrator. User inputs requirements → CTO plans → HR build
 - `AICOMPANY_LLM_BACKEND` — optional, defaults to `anthropic` (pluggable: any backend implementing `LLMBackend` protocol)
 - `AICOMPANY_MODEL` — optional, defaults to `claude-sonnet-4-6`
 - `ANTHROPIC_API_KEY` — required when using the `anthropic` backend
-- `AICOMPANY_MCP_SERVERS` — **required for `run`**, JSON array of MCP server objects
+- `AICOMPANY_MCP_SERVERS` — optional, enables remote server-side MCP (Anthropic beta). Not needed for normal use — tools run locally by default.
   - Example: `[{"type":"url","url":"https://<tunnel>.trycloudflare.com/mcp","name":"mycomp"}]`
-  - Start the MCP server: `./scripts/start_mcp.sh` (starts server + cloudflare tunnel, prints public URL)
-  - Requires `cloudflared` binary in the project root — download from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
-  - See `docs/BACKENDS.md` for the required tool interface
+  - See `scripts/start_mcp.sh` and `docs/09-mcp-server.md` for setup when needed
 
 ---
 
@@ -91,7 +89,7 @@ aicompany/          core package
                     _validate_task_dependencies), validate_hr_response. PATTERN_ROLES set for role validation.
   cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
   mcp_server.py     FastMCP server exposing file/shell tools to Claude agents (run via scripts/start_mcp.sh)
-tests/              pytest suite — 294 tests, all mocked (fake_mcp_server.py — MCP reference impl)
+tests/              pytest suite — 289 tests, all mocked (fake_mcp_server.py — MCP reference impl)
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
                     README.md — navigation index for all docs
                     01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams

@@ -75,7 +75,25 @@ class TestLLMReasoner:
             with pytest.raises(RuntimeError, match="always fails"):
                 reasoner.think(person, messages)
 
-        assert backend.call.call_count == 3
+    def test_remote_mcp_connection_error_is_not_retried(self):
+        from aicompany.reasoner import LLMReasoner
+        from aicompany.models import Person
+        import aicompany.config as cfg
+
+        backend = MagicMock()
+        backend.call.side_effect = Exception(
+            "Connection error while communicating with MCP server. "
+            "The server may be unavailable or unresponsive."
+        )
+        reasoner = LLMReasoner(backend=backend)
+        person = Person(id="p", name="P", role="coder", identity="You.")
+
+        with patch("aicompany.reasoner.time.sleep"), \
+             patch.object(cfg, "LLM_RETRY_ATTEMPTS", 3):
+            with pytest.raises(Exception, match="Connection error while communicating with MCP server"):
+                reasoner.think(person, [])
+
+        assert backend.call.call_count == 1  # no retries
 
     def test_think_respects_retry_attempts_config(self):
         from aicompany.reasoner import LLMReasoner

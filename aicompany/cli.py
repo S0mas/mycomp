@@ -1,12 +1,3 @@
-import contextlib
-import re
-import socket
-import subprocess
-import sys
-import tempfile
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import click
@@ -206,88 +197,6 @@ def cmd_new_project(requirements_file: str):
 
 # ── run ────────────────────────────────────────────────────────────────────────
 
-def _wait_for_tunnel(url: str, timeout: int = 30) -> bool:
-    """Poll url until it responds (any HTTP response = tunnel is up). Returns True on success."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            urllib.request.urlopen(url, timeout=5)
-            return True
-        except urllib.error.HTTPError:
-            return True  # any HTTP error still means the tunnel is serving traffic
-        except Exception:
-            time.sleep(1)
-    return False
-
-
-@contextlib.contextmanager
-def _auto_mcp_context():
-    """Start MCP server + cloudflare tunnel, inject URL into config.MCP_SERVERS."""
-    cloudflared = config.BASE_DIR / "cloudflared"
-    if not cloudflared.exists():
-        raise RuntimeError(
-            "cloudflared binary not found in the project root.\n"
-            "Download from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/\n"
-            "Place the binary at: " + str(cloudflared)
-        )
-
-    with socket.socket() as s:
-        s.bind(("", 0))
-        port = s.getsockname()[1]
-
-    _print_info(f"Starting MCP server on port {port}...")
-    server_proc = subprocess.Popen(
-        [sys.executable, "-m", "aicompany.mcp_server", "--sse", "--port", str(port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    time.sleep(1.5)
-    if server_proc.poll() is not None:
-        raise RuntimeError(f"MCP server failed to start on port {port}.")
-
-    _print_info("Starting cloudflare tunnel...")
-    tunnel_log = Path(tempfile.mktemp(suffix=".txt"))
-    tunnel_log_fh = tunnel_log.open("w")
-    tunnel_proc = subprocess.Popen(
-        [str(cloudflared), "tunnel", "--url", f"http://localhost:{port}"],
-        stdout=tunnel_log_fh, stderr=subprocess.STDOUT,
-    )
-    tunnel_log_fh.close()
-
-    tunnel_url = None
-    for _ in range(30):
-        try:
-            m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", tunnel_log.read_text())
-            if m:
-                tunnel_url = m.group()
-                break
-        except OSError:
-            pass
-        time.sleep(1)
-    tunnel_log.unlink(missing_ok=True)
-
-    if not tunnel_url:
-        server_proc.kill()
-        tunnel_proc.kill()
-        raise RuntimeError("Could not get cloudflare tunnel URL after 30s. Is cloudflared working?")
-
-    mcp_url = f"{tunnel_url}/mcp"
-    config.MCP_SERVERS = [{"type": "url", "url": mcp_url, "name": "mycomp"}]
-
-    _print_info("Verifying tunnel is reachable...")
-    if not _wait_for_tunnel(tunnel_url):
-        server_proc.kill()
-        tunnel_proc.kill()
-        raise RuntimeError(f"Tunnel URL {tunnel_url} is not reachable after 30s.")
-
-    _print_ok(f"MCP ready: {mcp_url}")
-
-    try:
-        yield
-    finally:
-        server_proc.kill()
-        tunnel_proc.kill()
-        server_proc.wait()
-        tunnel_proc.wait()
 
 
 @click.command("run")
