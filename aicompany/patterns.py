@@ -20,6 +20,12 @@ def _members_by_role(members: list[Person], role: str, exclude_id: str = "") -> 
     return [m for m in members if m.role == role and m.id != exclude_id]
 
 
+def _step(session: Session, sender: str, kind: str, n: int = 1) -> str | None:
+    """Return content of the Nth already-saved message from sender with kind, or None."""
+    matches = [m.content for m in session.messages if m.sender == sender and m.kind == kind]
+    return matches[n - 1] if len(matches) >= n else None
+
+
 def _agent_rules(session_rules_text: str, workspace: str) -> str:
     """Combine session communication rules with workspace file-writing instructions."""
     if not workspace:
@@ -86,35 +92,52 @@ def run_lead_delegates(
     _status = on_status or (lambda msg: None)
     rules_text = session.rules.describe(lead.id, session.participants)
 
-    session.add_message(Message(
-        sender="orchestrator", recipient=lead.id, kind="task",
-        content=_format_task_for_lead(task_title, task_description, project_context, members),
-    ))
-    _status(f"{lead.name} (lead) writing brief...")
-    brief = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
-    session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
-    session.advance_round()
+    # Step 1: Lead brief (skip if already in session)
+    brief = _step(session, lead.id, "brief")
+    if brief:
+        _status(f"{lead.name} (lead) brief already done — resuming")
+    else:
+        session.add_message(Message(
+            sender="orchestrator", recipient=lead.id, kind="task",
+            content=_format_task_for_lead(task_title, task_description, project_context, members),
+        ))
+        _status(f"{lead.name} (lead) writing brief...")
+        brief = reasoner.think(lead, session.messages_for(lead.id),
+                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
+        session.advance_round()
 
+    # Step 2: Each member executes (skip individual members already in session)
     contributions = []
     for person in [m for m in members if m.id != lead.id]:
         person_rules = session.rules.describe(person.id, session.participants)
-        _status(f"{person.name} ({person.role}) executing...")
-        output = reasoner.think(person, session.messages_for(person.id),
-                                skill_registry, _agent_rules(person_rules, workspace), max_tokens)
-        session.add_message(Message(sender=person.id, recipient=lead.id, kind="result", content=output))
-        contributions.append({"name": person.name, "output": output})
-    session.advance_round()
+        existing = _step(session, person.id, "result")
+        if existing:
+            _status(f"{person.name} ({person.role}) already done — resuming")
+            contributions.append({"name": person.name, "output": existing})
+        else:
+            _status(f"{person.name} ({person.role}) executing...")
+            output = reasoner.think(person, session.messages_for(person.id),
+                                    skill_registry, _agent_rules(person_rules, workspace), max_tokens)
+            session.add_message(Message(sender=person.id, recipient=lead.id, kind="result", content=output))
+            contributions.append({"name": person.name, "output": output})
+    if contributions and not _step(session, lead.id, "brief"):
+        session.advance_round()
 
-    if contributions:
+    # Step 3: Lead synthesizes (skip if already in session)
+    final = _step(session, lead.id, "result")
+    if final:
+        _status(f"{lead.name} (lead) synthesis already done — resuming")
+    elif contributions:
         _status(f"{lead.name} (lead) synthesizing...")
         final = reasoner.think(lead, session.messages_for(lead.id),
                                skill_registry, _agent_rules(rules_text, workspace), max_tokens)
     else:
         final = brief
 
-    session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
-    session.complete()
+    if not session.is_complete():
+        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+        session.complete()
     return final
 
 
@@ -153,23 +176,37 @@ def run_pair_review(
     if not coder:
         # Lead acts as producer: lead drafts → reviewer reviews → lead revises → lead finalizes.
         # Used by teams like cto_team (lead + reviewer, no dedicated coder).
-        session.add_message(Message(
-            sender="orchestrator", recipient=lead.id, kind="task",
-            content=_format_task_for_lead(task_title, task_description, project_context, members),
-        ))
-        _status(f"{lead.name} (lead) producing initial draft...")
-        draft = reasoner.think(lead, session.messages_for(lead.id),
-                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
-        session.add_message(Message(sender=lead.id, recipient=reviewer.id, kind="result", content=draft))
-        session.advance_round()
-
         reviewer_rules = session.rules.describe(reviewer.id, session.participants)
-        _status(f"{reviewer.name} (reviewer) reviewing...")
-        review = reasoner.think(reviewer, session.messages_for(reviewer.id),
-                                skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
-        session.add_message(Message(sender=reviewer.id, recipient=lead.id, kind="review", content=review))
 
-        if not session.is_complete():
+        # Step 1: Lead initial draft
+        draft = _step(session, lead.id, "result")
+        if draft:
+            _status(f"{lead.name} (lead) draft already done — resuming")
+        else:
+            session.add_message(Message(
+                sender="orchestrator", recipient=lead.id, kind="task",
+                content=_format_task_for_lead(task_title, task_description, project_context, members),
+            ))
+            _status(f"{lead.name} (lead) producing initial draft...")
+            draft = reasoner.think(lead, session.messages_for(lead.id),
+                                   skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+            session.add_message(Message(sender=lead.id, recipient=reviewer.id, kind="result", content=draft))
+            session.advance_round()
+
+        # Step 2: Reviewer review
+        if _step(session, reviewer.id, "review"):
+            _status(f"{reviewer.name} (reviewer) review already done — resuming")
+        else:
+            _status(f"{reviewer.name} (reviewer) reviewing...")
+            review = reasoner.think(reviewer, session.messages_for(reviewer.id),
+                                    skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
+            session.add_message(Message(sender=reviewer.id, recipient=lead.id, kind="review", content=review))
+
+        # Step 3: Lead revision / final
+        final = _step(session, lead.id, "result", n=2)
+        if final:
+            _status(f"{lead.name} (lead) revision already done — resuming")
+        elif not session.is_complete():
             session.advance_round()
             _status(f"{lead.name} (lead) revising based on review...")
             final = reasoner.think(lead, session.messages_for(lead.id),
@@ -177,45 +214,69 @@ def run_pair_review(
         else:
             final = draft
 
-        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
-        session.complete()
+        if not session.is_complete():
+            session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+            session.complete()
         return final
 
-    session.add_message(Message(
-        sender="orchestrator", recipient=lead.id, kind="task",
-        content=_format_task_for_lead(task_title, task_description, project_context, members),
-    ))
-    _status(f"{lead.name} (lead) writing brief...")
-    brief = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
-    session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
-    session.advance_round()
-
+    # ── Full pair_review: coder + reviewer ────────────────────────────────────
     coder_rules = session.rules.describe(coder.id, session.participants)
-    _status(f"{coder.name} (coder) implementing...")
-    code = reasoner.think(coder, session.messages_for(coder.id),
-                          skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
-    session.add_message(Message(sender=coder.id, recipient=reviewer.id, kind="result", content=code))
-    session.advance_round()
-
     reviewer_rules = session.rules.describe(reviewer.id, session.participants)
-    _status(f"{reviewer.name} (reviewer) reviewing...")
-    review = reasoner.think(reviewer, session.messages_for(reviewer.id),
-                            skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
-    session.add_message(Message(sender=reviewer.id, recipient=coder.id, kind="review", content=review))
 
-    if not session.is_complete():
+    # Step 1: Lead brief
+    brief = _step(session, lead.id, "brief")
+    if brief:
+        _status(f"{lead.name} (lead) brief already done — resuming")
+    else:
+        session.add_message(Message(
+            sender="orchestrator", recipient=lead.id, kind="task",
+            content=_format_task_for_lead(task_title, task_description, project_context, members),
+        ))
+        _status(f"{lead.name} (lead) writing brief...")
+        brief = reasoner.think(lead, session.messages_for(lead.id),
+                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
+        session.advance_round()
+
+    # Step 2: Coder implementation
+    if _step(session, coder.id, "result"):
+        _status(f"{coder.name} (coder) implementation already done — resuming")
+    else:
+        _status(f"{coder.name} (coder) implementing...")
+        code = reasoner.think(coder, session.messages_for(coder.id),
+                              skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
+        session.add_message(Message(sender=coder.id, recipient=reviewer.id, kind="result", content=code))
+        session.advance_round()
+
+    # Step 3: Reviewer review
+    if _step(session, reviewer.id, "review"):
+        _status(f"{reviewer.name} (reviewer) review already done — resuming")
+    else:
+        _status(f"{reviewer.name} (reviewer) reviewing...")
+        review = reasoner.think(reviewer, session.messages_for(reviewer.id),
+                                skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
+        session.add_message(Message(sender=reviewer.id, recipient=coder.id, kind="review", content=review))
+
+    # Step 4: Coder revision (optional)
+    if not session.is_complete() and not _step(session, coder.id, "result", n=2):
         session.advance_round()
         _status(f"{coder.name} (coder) revising...")
         revised = reasoner.think(coder, session.messages_for(coder.id),
                                  skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
         session.add_message(Message(sender=coder.id, recipient=lead.id, kind="result", content=revised))
 
-    _status(f"{lead.name} (lead) finalizing...")
-    final = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
-    session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
-    session.complete()
+    # Step 5: Lead final
+    final = _step(session, lead.id, "result")
+    if final:
+        _status(f"{lead.name} (lead) final already done — resuming")
+    else:
+        _status(f"{lead.name} (lead) finalizing...")
+        final = reasoner.think(lead, session.messages_for(lead.id),
+                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+
+    if not session.is_complete():
+        session.complete()
     return final
 
 
@@ -257,54 +318,78 @@ def run_develop_test_review(
                                   on_status, workspace)
 
     rules_text = session.rules.describe(lead.id, session.participants)
-
-    session.add_message(Message(
-        sender="orchestrator", recipient=lead.id, kind="task",
-        content=_format_task_for_lead(task_title, task_description, project_context, members),
-    ))
-    _status(f"{lead.name} (lead) writing brief...")
-    brief = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
-    session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
-    session.advance_round()
-
     coder_rules = session.rules.describe(coder.id, session.participants)
-    _status(f"{coder.name} (coder) implementing...")
-    code = reasoner.think(coder, session.messages_for(coder.id),
-                          skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
-    session.add_message(Message(sender=coder.id, recipient=tester.id, kind="result", content=code))
-    session.advance_round()
-
     tester_rules = session.rules.describe(tester.id, session.participants)
-    _status(f"{tester.name} (tester) writing requirement tests...")
-    tests = reasoner.think(tester, session.messages_for(tester.id),
-                           skill_registry, _agent_rules(tester_rules, workspace), max_tokens)
-    session.add_message(Message(sender=tester.id, recipient=reviewer.id, kind="result", content=tests))
+    reviewer_rules = session.rules.describe(reviewer.id, session.participants)
+
+    # Step 1: Lead brief
+    brief = _step(session, lead.id, "brief")
+    if brief:
+        _status(f"{lead.name} (lead) brief already done — resuming")
+    else:
+        session.add_message(Message(
+            sender="orchestrator", recipient=lead.id, kind="task",
+            content=_format_task_for_lead(task_title, task_description, project_context, members),
+        ))
+        _status(f"{lead.name} (lead) writing brief...")
+        brief = reasoner.think(lead, session.messages_for(lead.id),
+                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
+        session.advance_round()
+
+    # Step 2: Coder implements
+    if _step(session, coder.id, "result"):
+        _status(f"{coder.name} (coder) implementation already done — resuming")
+    else:
+        _status(f"{coder.name} (coder) implementing...")
+        code = reasoner.think(coder, session.messages_for(coder.id),
+                              skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
+        session.add_message(Message(sender=coder.id, recipient=tester.id, kind="result", content=code))
+        session.advance_round()
+
+    # Step 3: Tester writes tests
+    if _step(session, tester.id, "result"):
+        _status(f"{tester.name} (tester) tests already done — resuming")
+    elif not session.is_complete():
+        _status(f"{tester.name} (tester) writing requirement tests...")
+        tests = reasoner.think(tester, session.messages_for(tester.id),
+                               skill_registry, _agent_rules(tester_rules, workspace), max_tokens)
+        session.add_message(Message(sender=tester.id, recipient=reviewer.id, kind="result", content=tests))
 
     if session.is_complete():
-        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=brief))
-        session.complete()
-        return brief
+        final = _step(session, lead.id, "result") or brief
+        return final
 
-    session.advance_round()
-    reviewer_rules = session.rules.describe(reviewer.id, session.participants)
-    _status(f"{reviewer.name} (reviewer) reviewing code and requirement tests...")
-    review = reasoner.think(reviewer, session.messages_for(reviewer.id),
-                            skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
-    session.add_message(Message(sender=reviewer.id, recipient=coder.id, kind="review", content=review))
+    # Step 4: Reviewer reviews
+    if _step(session, reviewer.id, "review"):
+        _status(f"{reviewer.name} (reviewer) review already done — resuming")
+    else:
+        session.advance_round()
+        _status(f"{reviewer.name} (reviewer) reviewing code and requirement tests...")
+        review = reasoner.think(reviewer, session.messages_for(reviewer.id),
+                                skill_registry, _agent_rules(reviewer_rules, workspace), max_tokens)
+        session.add_message(Message(sender=reviewer.id, recipient=coder.id, kind="review", content=review))
 
-    if not session.is_complete():
+    # Step 5: Coder revision (optional)
+    if not session.is_complete() and not _step(session, coder.id, "result", n=2):
         session.advance_round()
         _status(f"{coder.name} (coder) revising...")
         revised = reasoner.think(coder, session.messages_for(coder.id),
                                  skill_registry, _agent_rules(coder_rules, workspace), max_tokens)
         session.add_message(Message(sender=coder.id, recipient=lead.id, kind="result", content=revised))
 
-    _status(f"{lead.name} (lead) finalizing with traceability summary...")
-    final = reasoner.think(lead, session.messages_for(lead.id),
-                           skill_registry, _agent_rules(rules_text, workspace), max_tokens)
-    session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
-    session.complete()
+    # Step 6: Lead final
+    final = _step(session, lead.id, "result")
+    if final:
+        _status(f"{lead.name} (lead) final already done — resuming")
+    else:
+        _status(f"{lead.name} (lead) finalizing with traceability summary...")
+        final = reasoner.think(lead, session.messages_for(lead.id),
+                               skill_registry, _agent_rules(rules_text, workspace), max_tokens)
+        session.add_message(Message(sender=lead.id, recipient="orchestrator", kind="result", content=final))
+
+    if not session.is_complete():
+        session.complete()
     return final
 
 

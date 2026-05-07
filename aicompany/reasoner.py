@@ -16,7 +16,7 @@ import time
 import httpx
 
 from . import config
-from .llm_backend import LLMBackend, Reasoner, create_backend
+from .llm_backend import LLMBackend, LLMRateLimitError, Reasoner, create_backend
 from .models import Message, Person, Skill, build_prompt
 
 
@@ -71,17 +71,34 @@ class LLMReasoner:
         system = build_system_prompt(person, skill_registry, session_rules_text)
         user = build_user_prompt(person, messages)
         log = config.task_log.get()
-        for attempt in range(config.LLM_RETRY_ATTEMPTS):
+        rate_limit_count = 0
+        attempt = 0
+        while attempt < config.LLM_RETRY_ATTEMPTS:
             try:
                 return self._backend.call(system, user, max_tokens, config.MODEL)
+            except LLMRateLimitError:
+                rate_limit_count += 1
+                if rate_limit_count > config.LLM_RATE_LIMIT_MAX_RETRIES:
+                    raise
+                wait = config.LLM_RATE_LIMIT_WAIT
+                if log:
+                    log("RATE_LIMIT", f"Rate limited ({rate_limit_count}/{config.LLM_RATE_LIMIT_MAX_RETRIES})"
+                                      f" — waiting {wait}s before retry")
+                time.sleep(wait)
+                # Rate limit retries don't consume attempt budget
             except Exception as exc:
-                if attempt == config.LLM_RETRY_ATTEMPTS - 1:
+                attempt += 1
+                if attempt >= config.LLM_RETRY_ATTEMPTS:
                     raise
                 if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
                     raise
-                wait = config.LLM_RETRY_BACKOFF_BASE ** attempt
+                if "Connection error while communicating with MCP server" in str(exc):
+                    if log:
+                        log("ERROR", "MCP server unreachable — tunnel may have dropped.")
+                    raise
+                wait = config.LLM_RETRY_BACKOFF_BASE ** (attempt - 1)
                 if log:
-                    log("RETRY", f"attempt {attempt + 1}/{config.LLM_RETRY_ATTEMPTS} failed: "
+                    log("RETRY", f"attempt {attempt}/{config.LLM_RETRY_ATTEMPTS} failed: "
                                  f"{type(exc).__name__}: {exc} — retrying in {wait:.0f}s")
                 time.sleep(wait)
 

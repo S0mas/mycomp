@@ -16,7 +16,7 @@ from pathlib import Path
 import anthropic
 
 from aicompany import config
-from aicompany.llm_backend import register_backend
+from aicompany.llm_backend import LLMRateLimitError, register_backend
 
 _TIMEOUT_PLAIN = int(os.environ.get("AICOMPANY_API_TIMEOUT", "120"))
 _TIMEOUT_MCP   = int(os.environ.get("AICOMPANY_API_TIMEOUT_MCP", "300"))
@@ -189,17 +189,21 @@ class AnthropicBackend:
 
         # ── Local tool-use loop (default) ────────────────────────────────────
         _log("BACKEND", f"call model={model} max_tokens={max_tokens} mcp=local timeout={_TIMEOUT_PLAIN}s")
+
         messages: list[dict] = [{"role": "user", "content": user}]
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
-            response = self._client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
-                tools=_TOOLS,
-                timeout=_TIMEOUT_PLAIN,
-            )
+            try:
+                response = self._client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                    tools=_TOOLS,
+                    timeout=_TIMEOUT_PLAIN,
+                )
+            except anthropic.RateLimitError as exc:
+                raise LLMRateLimitError(str(exc)) from exc
             _log("BACKEND", (
                 f"iteration={iteration} stop_reason={response.stop_reason} "
                 f"input_tokens={response.usage.input_tokens} "

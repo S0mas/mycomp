@@ -144,14 +144,28 @@ def _execute_task(
 
     team, lead, members, skill_registry = registry.load_team_with_members(task.assigned_team)
     rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
-    session = create_session(task.id, [p.id for p in members], rules)
+
+    # Resume from a partial session saved by a previous failed run, or start fresh.
+    existing = registry.load_session(project_id, task.id)
+    session = existing if existing else create_session(task.id, [p.id for p in members], rules)
+
+    # Save session to disk after every message so a retry can resume mid-task.
+    orig_add = session.add_message
+    def _add_and_save(msg):
+        result = orig_add(msg)
+        registry.save_session(project_id, session)
+        return result
+    session.add_message = _add_and_save
+
     context = _build_project_context(plan, completed_ids, workspace, task)
     reasoner = create_reasoner()
     reasoner.setup(members, skill_registry)
 
+    resuming = existing is not None and len(existing.messages) > 0
     registry.append_task_log(project_id, task.id, "INFO",
                              f"team={task.assigned_team} pattern={rules.pattern} "
-                             f"max_rounds={rules.max_rounds} members={[p.id for p in members]}")
+                             f"max_rounds={rules.max_rounds} members={[p.id for p in members]}"
+                             + (" [RESUMING]" if resuming else ""))
 
     def _on_status(msg: str) -> None:
         print(f"    → {msg}")

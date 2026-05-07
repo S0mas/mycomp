@@ -1,6 +1,6 @@
 """Tests for Message, Session, SessionRules, and communication patterns."""
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from aicompany.models import Message, Session, SessionRules, Person
 from aicompany.communication import (
@@ -321,6 +321,108 @@ class TestDevelopTestReview:
              Person(id="reviewer", name="R", role="reviewer", identity="R.")],
             "Task", "desc", "ctx", _make_mock_reasoner(),
         ) == "Mock output"
+
+
+class TestPatternResume:
+    """Patterns must skip steps whose output is already in the session."""
+
+    def test_pair_review_lead_as_producer_skips_done_steps(self):
+        lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
+        reviewer = Person(id="rev", name="Reviewer", role="reviewer", identity="Rev.")
+        session = create_session("t1", ["lead", "rev"],
+                                 SessionRules(pattern="pair_review", max_rounds=4))
+        # Pre-populate session with draft + review already done
+        session.add_message(Message(sender="orchestrator", recipient="lead", kind="task", content="task"))
+        session.add_message(Message(sender="lead", recipient="rev", kind="result", content="draft"))
+        session.advance_round()
+        session.add_message(Message(sender="rev", recipient="lead", kind="review", content="looks good"))
+
+        reasoner = _make_mock_reasoner()
+        output = run_pair_review(session, lead, [lead, reviewer], "T", "d", "c", reasoner)
+
+        assert output == "Mock output"
+        assert session.status == "complete"
+        # Only the final revision step should have called think()
+        assert reasoner.think.call_count == 1
+
+    def test_lead_delegates_skips_members_already_done(self):
+        lead, coder, reviewer = _make_persons()
+        session = create_session("t1", ["lead", "coder", "reviewer"],
+                                 SessionRules(pattern="lead_delegates", max_rounds=5))
+        # Pre-populate: brief + coder done, reviewer not done yet
+        session.add_message(Message(sender="orchestrator", recipient="lead", kind="task", content="task"))
+        session.add_message(Message(sender="lead", recipient="team", kind="brief", content="brief"))
+        session.advance_round()
+        session.add_message(Message(sender="coder", recipient="lead", kind="result", content="code"))
+
+        reasoner = _make_mock_reasoner()
+        run_lead_delegates(session, lead, [lead, coder, reviewer], "T", "d", "c", reasoner)
+
+        # Only reviewer + lead synthesis should have called think() (not coder, not brief)
+        assert reasoner.think.call_count == 2
+
+    def test_fully_completed_session_returns_without_llm_calls(self):
+        lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
+        reviewer = Person(id="rev", name="Reviewer", role="reviewer", identity="Rev.")
+        session = create_session("t1", ["lead", "rev"],
+                                 SessionRules(pattern="pair_review", max_rounds=4))
+        session.add_message(Message(sender="orchestrator", recipient="lead", kind="task", content="task"))
+        session.add_message(Message(sender="lead", recipient="rev", kind="result", content="draft"))
+        session.advance_round()
+        session.add_message(Message(sender="rev", recipient="lead", kind="review", content="review"))
+        session.advance_round()
+        session.add_message(Message(sender="lead", recipient="rev", kind="result", content="final"))
+        session.add_message(Message(sender="lead", recipient="orchestrator", kind="result", content="final"))
+        session.complete()
+
+        reasoner = _make_mock_reasoner()
+        output = run_pair_review(session, lead, [lead, reviewer], "T", "d", "c", reasoner)
+
+        reasoner.think.assert_not_called()
+        assert output == "final"
+
+
+class TestRateLimitRetry:
+    def test_rate_limit_retries_without_consuming_attempt_budget(self):
+        from aicompany.reasoner import LLMReasoner
+        from aicompany.models import Person
+        from aicompany.llm_backend import LLMRateLimitError
+        import aicompany.config as cfg
+
+        backend = MagicMock()
+        backend.call.side_effect = [
+            LLMRateLimitError("429"),
+            LLMRateLimitError("429"),
+            "final answer",
+        ]
+        reasoner = LLMReasoner(backend=backend)
+        person = Person(id="p", name="P", role="coder", identity="You.")
+
+        with patch("aicompany.reasoner.time.sleep"), \
+             patch.object(cfg, "LLM_RATE_LIMIT_MAX_RETRIES", 5), \
+             patch.object(cfg, "LLM_RETRY_ATTEMPTS", 3):
+            result = reasoner.think(person, [])
+
+        assert result == "final answer"
+        assert backend.call.call_count == 3  # 2 rate limits + 1 success
+
+    def test_rate_limit_fails_after_max_retries(self):
+        from aicompany.reasoner import LLMReasoner
+        from aicompany.models import Person
+        from aicompany.llm_backend import LLMRateLimitError
+        import aicompany.config as cfg
+
+        backend = MagicMock()
+        backend.call.side_effect = LLMRateLimitError("429 forever")
+        reasoner = LLMReasoner(backend=backend)
+        person = Person(id="p", name="P", role="coder", identity="You.")
+
+        with patch("aicompany.reasoner.time.sleep"), \
+             patch.object(cfg, "LLM_RATE_LIMIT_MAX_RETRIES", 2):
+            with pytest.raises(LLMRateLimitError):
+                reasoner.think(person, [])
+
+        assert backend.call.call_count == 3  # 2 max + 1 initial = 3 calls
 
 
 class TestAgentRules:

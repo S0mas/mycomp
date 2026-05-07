@@ -32,6 +32,8 @@ def _call(system: str, user: str, max_tokens: int, backend: LLMBackend | None = 
                 raise
             if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
                 raise
+            if "Connection error while communicating with MCP server" in str(exc):
+                raise
             time.sleep(config.LLM_RETRY_BACKOFF_BASE ** attempt)
 
 

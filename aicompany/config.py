@@ -27,6 +27,8 @@ MAX_TOKENS_AUTOFIX = 4096     # token budget for requirements autofix
 
 LLM_RETRY_ATTEMPTS: int = int(os.environ.get("AICOMPANY_LLM_RETRY_ATTEMPTS", "3"))
 LLM_RETRY_BACKOFF_BASE: float = float(os.environ.get("AICOMPANY_LLM_RETRY_BACKOFF_BASE", "2.0"))
+LLM_RATE_LIMIT_WAIT: int = int(os.environ.get("AICOMPANY_LLM_RATE_LIMIT_WAIT", "60"))
+LLM_RATE_LIMIT_MAX_RETRIES: int = int(os.environ.get("AICOMPANY_LLM_RATE_LIMIT_MAX_RETRIES", "5"))
 
 # Per-task log callback — set by orchestrator before each task, read by backends/reasoner.
 # Signature: (level: str, message: str) -> None

@@ -66,6 +66,10 @@ class Reasoner(Protocol):
         ...
 
 
+class LLMRateLimitError(Exception):
+    """Raised when the LLM API rate limit is hit. Retried with a long wait."""
+
+
 # ── Backend registry ───────────────────────────────────────────────────────────
 
 _REGISTRY: dict[str, type[LLMBackend]] = {}
