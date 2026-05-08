@@ -1,0 +1,16 @@
+communication:
+  max_rounds: 4
+  pattern: pair_review
+created_at: '2026-05-08T18:09:37.838093+00:00'
+id: qa_team
+lead_id: qa_lead
+members:
+- qa_lead
+- qa_tester_1
+- qa_automation_engineer
+name: Quality Assurance Team
+skills:
+- testing
+- automation
+- quality_assurance
+- python

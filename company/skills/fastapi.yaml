@@ -1,9 +1,5 @@
-category: framework
-created_at: '2026-05-08T17:30:02.981218+00:00'
+category: ''
+created_at: '2026-05-08T18:08:46.540761+00:00'
 id: fastapi
-knowledge:
-- Use async def for route handlers
-- Use Pydantic models for request/response validation
-- Use Depends() for dependency injection
-- Always set response_model for automatic serialization
+knowledge: []
 name: FastAPI

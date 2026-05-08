@@ -1,8 +1,5 @@
-category: framework
-created_at: '2026-05-08T17:30:02.981221+00:00'
+category: ''
+created_at: '2026-05-08T18:08:46.554489+00:00'
 id: sqlalchemy
-knowledge:
-- Use SQLAlchemy 2.0 select() style, not legacy Query
-- Define models with mapped_column() for type safety
-- Use sessionmaker with context managers for transaction safety
+knowledge: []
 name: SQLAlchemy

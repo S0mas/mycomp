@@ -1,0 +1,17 @@
+communication:
+  max_rounds: 4
+  pattern: pair_review
+created_at: '2026-05-08T18:09:12.160239+00:00'
+id: devops_team
+lead_id: devops_lead
+members:
+- devops_lead
+- devops_engineer
+- devops_reviewer
+name: DevOps & Infrastructure Team
+skills:
+- devops
+- cloud_infrastructure
+- ci_cd
+- containerization
+- monitoring

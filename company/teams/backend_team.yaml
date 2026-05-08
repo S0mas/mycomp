@@ -1,0 +1,24 @@
+communication:
+  max_rounds: 4
+  pattern: pair_review
+created_at: '2026-05-08T18:08:46.635674+00:00'
+id: backend_team
+lead_id: be_lead
+members:
+- be_lead
+- be_senior_backend
+- be_database_specialist
+- be_reviewer
+name: Backend Engineering Team
+skills:
+- python
+- fastapi
+- postgresql
+- redis
+- docker
+- sqlalchemy
+- asyncpg
+- pydantic
+- rest_api
+- database_design
+- async_programming

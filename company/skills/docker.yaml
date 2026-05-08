@@ -1,8 +1,5 @@
-category: tool
-created_at: '2026-05-08T17:30:02.981224+00:00'
+category: ''
+created_at: '2026-05-08T18:08:46.551361+00:00'
 id: docker
-knowledge:
-- Use multi-stage builds to minimize image size
-- Never store secrets in image layers
-- Pin base image versions for reproducibility
+knowledge: []
 name: Docker
