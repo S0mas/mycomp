@@ -12,11 +12,10 @@ import yaml
 
 from . import config, registry
 from .communication import create_session, run_pattern
-from .evaluation import extract_json_block as _extract_json_block, evaluate_sub_requirements
+from .utils import extract_json_block as _extract_json_block
 from .models import (
-    Person, Plan, Requirement, SessionRules, Skill, SubRequirement, Task, TaskInput, Team,
+    Person, Plan, Requirement, SessionRules, Skill, Task, TaskInput, Team,
 )
-from .validation import validate_cto_plan, validate_hr_response
 
 
 # ── HR system prompt ──────────────────────────────────────────────────────────
@@ -66,17 +65,11 @@ class PlanResult:
         self,
         project_id: str,
         plan: Plan,
-        plan_warnings: list[str],
         created_teams: list[str],
-        hr_warnings: dict[str, list[str]],
-        sub_req_evaluations: list | None = None,
     ) -> None:
         self.project_id = project_id
         self.plan = plan
-        self.plan_warnings = plan_warnings
         self.created_teams = created_teams
-        self.hr_warnings = hr_warnings
-        self.sub_req_evaluations = sub_req_evaluations or []
 
 
 # ── CTO planning ──────────────────────────────────────────────────────────────
@@ -131,20 +124,15 @@ async def _hr_create_team(team_id: str, tech_context: str) -> dict:
 
 async def _create_missing_teams(
     teams_required: list[str], tech_stack: list[str], on_status: callable,
-) -> tuple[list[str], dict[str, list[str]]]:
+) -> list[str]:
     state = registry.load_state()
     missing = [tid for tid in teams_required if tid not in state.team_ids()]
     created: list[str] = []
-    warnings: dict[str, list[str]] = {}
     tech_context = ", ".join(tech_stack)
 
     for team_id in missing:
         on_status(f"Team '{team_id}' not found — HR is creating it...")
         result = await _hr_create_team(team_id, tech_context)
-        errors = validate_hr_response(result, team_id)
-        if errors:
-            warnings[team_id] = errors
-
         team_data = result.get("team", result)
         team_data["id"] = team_id
         for sd in result.get("skills", []):
@@ -154,7 +142,7 @@ async def _create_missing_teams(
         registry.save_team(Team.from_dict(team_data))
         created.append(team_id)
 
-    return created, warnings
+    return created
 
 
 # ── Technology tracking ───────────────────────────────────────────────────────
@@ -244,25 +232,6 @@ async def plan_and_create_project(
     state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
 
     plan_dict = await _run_cto_planning(requirements_text, state_yaml, _status)
-    plan_warnings = validate_cto_plan(plan_dict)
-
-    # Evaluate CTO-generated sub-requirements against the policy
-    all_sub_reqs = [
-        SubRequirement.from_dict({**sub, "parent_id": req["id"]})
-        for req in plan_dict.get("requirements", [])
-        for sub in req.get("sub_requirements", [])
-    ]
-    sub_req_evaluations = []
-    if all_sub_reqs:
-        _status(f"Evaluating {len(all_sub_reqs)} sub-requirements against policy...")
-        sub_req_evaluations = await evaluate_sub_requirements(all_sub_reqs)
-        failed = [r for r in sub_req_evaluations if r.failed]
-        needs_work = [r for r in sub_req_evaluations if r.verdict == "needs_work"]
-        if failed:
-            _status(f"WARNING: {len(failed)} sub-requirement(s) failed policy — "
-                    f"{', '.join(r.id for r in failed)}")
-        if needs_work:
-            _status(f"NOTE: {len(needs_work)} sub-requirement(s) need improvement")
 
     title = plan_dict.get("title", "Untitled Project")
     tech_stack = plan_dict.get("tech_stack", [])
@@ -270,7 +239,7 @@ async def plan_and_create_project(
     raw_tasks = plan_dict.get("tasks", [])
     requirements = [Requirement.from_dict(r) for r in plan_dict.get("requirements", [])]
 
-    created_teams, hr_warnings = await _create_missing_teams(teams_required, tech_stack, _status)
+    created_teams = await _create_missing_teams(teams_required, tech_stack, _status)
     _update_technologies(tech_stack)
 
     project_id = f"proj_{uuid.uuid4().hex[:8]}"
@@ -285,7 +254,5 @@ async def plan_and_create_project(
     return PlanResult(
         project_id=project_id,
         plan=plan,
-        plan_warnings=plan_warnings,
         created_teams=created_teams,
-        hr_warnings=hr_warnings,
     )

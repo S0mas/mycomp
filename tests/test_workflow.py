@@ -38,8 +38,7 @@ class TestPlanAndCreateProject:
             "skills": [],
         }
         with patch("aicompany.planning._run_cto_planning", new=AsyncMock(return_value=cto_resp)), \
-             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)), \
-             patch("aicompany.planning.evaluate_sub_requirements", new=AsyncMock(return_value=[])):
+             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)):
             kwargs = {"on_status": on_status} if on_status is not None else {}
             return await plan_and_create_project("Build API", **kwargs)
 
@@ -60,8 +59,7 @@ class TestPlanAndCreateProject:
         })
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_needing_new)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
-             patch("aicompany.planning.evaluate_sub_requirements", new=AsyncMock(return_value=[])):
+             patch("aicompany.planning._hr_create_team", new=mock_hr):
             result = await plan_and_create_project("Build API")
         assert "new_team" in result.created_teams
         mock_hr.assert_called()
@@ -71,8 +69,7 @@ class TestPlanAndCreateProject:
         mock_hr = AsyncMock()
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_using_existing)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
-             patch("aicompany.planning.evaluate_sub_requirements", new=AsyncMock(return_value=[])):
+             patch("aicompany.planning._hr_create_team", new=mock_hr):
             result = await plan_and_create_project("Build API")
         mock_hr.assert_not_called()
         assert result.created_teams == []
@@ -90,8 +87,7 @@ class TestPlanAndCreateProject:
         }
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_needing_new)), \
-             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)), \
-             patch("aicompany.planning.evaluate_sub_requirements", new=AsyncMock(return_value=[])):
+             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)):
             await plan_and_create_project("Build API", on_status=statuses.append)
         assert any("new_team" in s for s in statuses)
 

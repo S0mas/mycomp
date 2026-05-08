@@ -5,10 +5,8 @@ import click
 
 from . import config, orchestrator, registry
 from .models import CompanyState, Person, Skill, Team
-from .seeds import default_skills, default_teams, default_requirements_policy
-from .validation import validate_requirements_text
+from .seeds import default_skills, default_teams, default_requirements_policy, default_plan_policy
 from .planning import plan_and_create_project
-from .evaluation import evaluate_requirements
 
 
 def _print_ok(msg: str) -> None:
@@ -63,6 +61,10 @@ def cmd_init():
     policy_file.write_text(default_requirements_policy(), encoding="utf-8")
     _print_ok(f"Created requirements policy: {policy_file.relative_to(config.BASE_DIR)}")
 
+    plan_policy_file = config.PLAN_POLICY_FILE
+    plan_policy_file.write_text(default_plan_policy(), encoding="utf-8")
+    _print_ok(f"Created plan policy: {plan_policy_file.relative_to(config.BASE_DIR)}")
+
     click.echo()
     _print_ok("Company ready. Run:")
     click.echo("    python main.py new-project <requirements.md>")
@@ -75,58 +77,20 @@ def cmd_init():
 def cmd_new_project(requirements_file: str):
     """Analyse requirements, build teams, and create a project plan."""
     requirements_text = Path(requirements_file).read_text(encoding="utf-8")
-
-    errors = validate_requirements_text(requirements_text)
-    if errors:
-        for e in errors:
-            _print_err(e)
+    if len(requirements_text.strip()) < 50:
+        _print_err("Requirements too short (minimum 50 characters).")
         raise SystemExit(1)
 
     click.echo(f"\nPlanning project from: {Path(requirements_file).name}")
 
-    async def _run():
-        click.echo("  → Evaluating requirements against company policy...")
-        eval_result = await evaluate_requirements(requirements_text)
-        if eval_result.verdict == "reject":
-            _print_err(f"Requirements rejected (clarity={eval_result.clarity}, "
-                       f"completeness={eval_result.completeness}, "
-                       f"feasibility={eval_result.feasibility})")
-            if eval_result.violations:
-                _print_err("Policy violations:")
-                for v in eval_result.violations:
-                    _print_err(f"  • {v}")
-            if eval_result.suggestions:
-                click.echo("Suggestions:")
-                for s in eval_result.suggestions:
-                    click.echo(f"  • {s}")
-            raise SystemExit(1)
-        elif eval_result.verdict == "needs_work":
-            _print_warn(f"Requirements need improvement: {eval_result.summary}")
-            if eval_result.suggestions:
-                for s in eval_result.suggestions:
-                    _print_warn(f"  • {s}")
-            _print_warn("Proceeding anyway — consider revising before running.")
-        else:
-            _print_ok(f"Requirements approved: {eval_result.summary}")
-
-        return await plan_and_create_project(
+    try:
+        plan_result = asyncio.run(plan_and_create_project(
             requirements_text,
             on_status=lambda msg: click.echo(f"  → {msg}"),
-        )
-
-    plan_result = asyncio.run(_run())
-
-    if plan_result.plan_warnings:
-        _print_warn("CTO plan has issues:")
-        for e in plan_result.plan_warnings:
-            _print_err(f"  {e}")
-        _print_warn("Proceeding with best-effort plan...")
-
-    for team_id, warnings in plan_result.hr_warnings.items():
-        _print_warn(f"HR response for '{team_id}' has issues:")
-        for w in warnings:
-            _print_err(f"    {w}")
-        _print_warn("Proceeding with best-effort team...")
+        ))
+    except Exception as exc:
+        _print_err(str(exc))
+        raise SystemExit(1)
 
     plan = plan_result.plan
     click.echo(f"  → Plan: \"{plan.title}\"")

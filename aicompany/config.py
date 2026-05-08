@@ -9,6 +9,7 @@ STATE_FILE = COMPANY_DIR / "state.yaml"
 TEAMS_DIR = COMPANY_DIR / "teams"
 SKILLS_DIR = COMPANY_DIR / "skills"
 REQUIREMENTS_POLICY_FILE = COMPANY_DIR / "requirements_policy.md"
+PLAN_POLICY_FILE = COMPANY_DIR / "plan_policy.md"
 PROJECTS_DIR = BASE_DIR / "projects"
 
 MODEL = os.environ.get("AICOMPANY_MODEL", "claude-sonnet-4-6")

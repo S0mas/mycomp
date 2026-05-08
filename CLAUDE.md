@@ -69,17 +69,22 @@ aicompany/          core package
   communication.py  create_session, run_pattern (async, dispatches to patterns.py). Re-exports pattern functions.
   patterns.py       Async pattern implementations: run_lead_delegates, run_pair_review, run_develop_test_review.
                     Each person gets a PersonAgent; multi-turn persons (lead, coder) keep their process alive.
-  evaluation.py     Requirements quality gate using claude-code-sdk query() (one-shot, no persistent process).
-                    evaluate_requirements(text) → RequirementsEvaluation: scores + verdict against company policy.
-                    evaluate_sub_requirements(subs) → list[SubRequirementEvaluation]: batch check after CTO planning.
-                    load_policy(): reads company/requirements_policy.md (seeded on init, editable per-company).
-                    extract_json_block(): shared JSON parsing utility (also imported by planning.py).
-  planning.py       async CTO planning + HR team creation + project assembly: PlanResult, plan_and_create_project (async)
-                    _run_cto_planning: CTO team via run_pattern (PersonAgent pair_review)
-                    _hr_create_team: one-shot SDK query() with embedded HR system prompt → JSON team definition
-                    Calls evaluate_sub_requirements() after CTO output to check generated sub-requirements.
-  seeds.py          CTO team (cto + cto_analyst) + shared skills (incl. testing). All dev teams created by HR on demand.
-                    default_requirements_policy(): default policy text written to company/requirements_policy.md on init.
+  utils.py          Shared utilities: extract_json_block() — parses ```json fenced blocks or bare JSON.
+  validation/       AI-driven quality validation package (multi-agent, policy-driven, fix-retry loop):
+    __init__.py     re-exports: ValidationPolicy, ValidationResult, ValidationProcess, ValidationError,
+                    RequirementsValidation, PlanValidation
+    policy.py       ValidationPolicy — loads .md policy file, lazy-cached, fallback default
+    result.py       ValidationResult — parsed from lead JSON output: verdict, issues, proposed_fix
+    process.py      ValidationProcess (ABC) + ValidationError — owns the fix-retry loop;
+                    uses lead_delegates pattern: lead briefs validators → each reviews → lead synthesises
+    requirements_validation.py  RequirementsValidation — 2 validators (tech analyst, quality reviewer);
+                    validates requirements text against requirements_policy.md
+    plan_validation.py          PlanValidation — 3 validators (architecture, traceability, feasibility);
+                    validates CTO plan dict against plan_policy.md
+  planning.py       async CTO planning + HR team creation + project assembly: PlanResult(project_id, plan, created_teams)
+                    plan_and_create_project: calls CTO → assembles Plan → saves to registry
+  seeds.py          CTO team + shared skills. default_requirements_policy() + default_plan_policy() seeded on init.
+                    CTO schema includes optional "subtasks" key for recursive planning signal.
   registry.py       all YAML file I/O. _load_yaml/_save_yaml helpers. save_* auto-registers in state.yaml.
                     Also: save/load requirements, RequirementTestSuites, RequirementTests.
   orchestrator.py   async execution loop + topological sort. _handle_checkpoint, _execute_task (async),
@@ -91,7 +96,7 @@ aicompany/          core package
   cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
                     cmd_new_project: evaluates requirements (rejects on policy violations), then plans.
                     cmd_init: seeds policy file (company/requirements_policy.md) on first run.
-tests/              pytest suite — 237 tests, all mocked (no API key needed).
+tests/              pytest suite — 242 tests, all mocked (no API key needed).
                     Async tests use pytest-asyncio (asyncio_mode=auto in pytest.ini).
                     Pattern/orchestrator tests mock PersonAgent via FakePersonAgent.
                     planning/cli tests use AsyncMock for _run_cto_planning, _hr_create_team, run_project.

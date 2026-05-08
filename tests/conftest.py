@@ -38,6 +38,8 @@ def isolated_fs(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJECTS_DIR", projects_dir)
     monkeypatch.setattr(config, "REQUIREMENTS_POLICY_FILE",
                         company_dir / "requirements_policy.md")
+    monkeypatch.setattr(config, "PLAN_POLICY_FILE",
+                        company_dir / "plan_policy.md")
 
     return tmp_path
 

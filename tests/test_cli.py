@@ -2,7 +2,7 @@
 Tests for aicompany/cli.py (Click commands)
 
 What we verify:
-  - `init` creates state.yaml and seeds cto_team + skills
+  - `init` creates state.yaml and seeds cto_team + skills + policy files
   - `init` is idempotent (second run warns, doesn't crash)
   - `new-project` reads requirements, runs CTO+HR, saves plan
   - `run` delegates to orchestrator.run_project
@@ -20,15 +20,8 @@ from click.testing import CliRunner
 import aicompany.config as config
 from aicompany.cli import cli
 from aicompany import registry
-from aicompany.models import CompanyState, RequirementsEvaluation, Team
+from aicompany.models import CompanyState, Team
 from tests.conftest import write_state, write_team, write_plan, write_persons
-
-
-def _mock_eval(verdict="proceed", summary="Looks good."):
-    return AsyncMock(return_value=RequirementsEvaluation(
-        clarity=5, completeness=5, feasibility=5,
-        verdict=verdict, summary=summary,
-    ))
 
 
 MOCK_CTO_RESPONSE = {
@@ -107,15 +100,12 @@ class TestInit:
 
 class TestNewProject:
     def _run_new_project(self, runner, requirements_file,
-                         cto_response=None, hr_response=None,
-                         eval_verdict="proceed"):
+                         cto_response=None, hr_response=None):
         runner.invoke(cli, ["init"])
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_response or MOCK_CTO_RESPONSE)), \
              patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=hr_response or MOCK_HR_RESPONSE)), \
-             patch("aicompany.cli.evaluate_requirements",
-                   new=_mock_eval(eval_verdict)):
+                   new=AsyncMock(return_value=hr_response or MOCK_HR_RESPONSE)):
             result = runner.invoke(cli, ["new-project", requirements_file])
         return result
 
@@ -146,8 +136,7 @@ class TestNewProject:
         cto_using_seeded = {**MOCK_CTO_RESPONSE, "teams_required": ["cto_team"]}
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_using_seeded)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
-             patch("aicompany.cli.evaluate_requirements", new=_mock_eval()):
+             patch("aicompany.planning._hr_create_team", new=mock_hr):
             runner.invoke(cli, ["new-project", requirements_file])
         mock_hr.assert_not_called()
 
@@ -156,8 +145,7 @@ class TestNewProject:
         mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=MOCK_CTO_RESPONSE)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
-             patch("aicompany.cli.evaluate_requirements", new=_mock_eval()):
+             patch("aicompany.planning._hr_create_team", new=mock_hr):
             runner.invoke(cli, ["new-project", requirements_file])
         mock_hr.assert_called_once()
 
@@ -173,27 +161,9 @@ class TestNewProject:
         mock_cto = AsyncMock(return_value=MOCK_CTO_RESPONSE)
         with patch("aicompany.planning._run_cto_planning", new=mock_cto), \
              patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)), \
-             patch("aicompany.cli.evaluate_requirements", new=_mock_eval()):
+                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)):
             runner.invoke(cli, ["new-project", requirements_file])
         mock_cto.assert_called_once()
-
-    def test_evaluation_reject_blocks_planning(self, runner, requirements_file):
-        runner.invoke(cli, ["init"])
-        mock_cto = AsyncMock(return_value=MOCK_CTO_RESPONSE)
-        with patch("aicompany.planning._run_cto_planning", new=mock_cto), \
-             patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)), \
-             patch("aicompany.cli.evaluate_requirements",
-                   new=_mock_eval("reject", "Too vague.")):
-            result = runner.invoke(cli, ["new-project", requirements_file])
-        assert result.exit_code == 1
-        mock_cto.assert_not_called()
-
-    def test_evaluation_needs_work_warns_but_continues(self, runner, requirements_file):
-        result = self._run_new_project(runner, requirements_file, eval_verdict="needs_work")
-        assert result.exit_code == 0
-        assert "need improvement" in result.output.lower() or "Proceeding anyway" in result.output
 
     def test_short_requirements_rejected(self, runner, tmp_path):
         short_req = tmp_path / "short.md"
