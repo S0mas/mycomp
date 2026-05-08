@@ -16,10 +16,11 @@ _JSON_RULES = [
     '"summary" (one sentence), "issues" (list of strings), '
     '"suggestions" (list of strings), "proposed_fix": null.',
     "Set verdict=approved only when requirements fully satisfy the policy.",
-    f"When rejecting with a fix: write the COMPLETE revised requirements text to "
-    f"`{_PROPOSAL_FILE}` in the workspace (plain text, no JSON encoding needed), "
-    f"then output the JSON verdict with proposed_fix null.",
-    "When approving or rejecting without a fix: do not write any file.",
+    f"When rejecting: you MUST write a COMPLETE revised requirements text to "
+    f"`{_PROPOSAL_FILE}` in the workspace BEFORE outputting the JSON. "
+    f"The file must be plain text — no JSON encoding. "
+    f"Address every issue found. Do not reject without providing a revised version.",
+    "When approving: do not write any file.",
 ]
 
 
@@ -82,7 +83,12 @@ class RequirementsValidation(ValidationProcess):
         return (
             f"{prefix}Validate the following requirements text against the policy.\n\n"
             f"## Requirements Policy\n\n{policy_text}\n\n"
-            f"## Requirements Under Review\n\n{artifact}"
+            f"## Requirements Under Review\n\n{artifact}\n\n"
+            f"## Your final output (mandatory)\n\n"
+            f"After collecting team feedback you MUST follow your rules:\n"
+            f"- If REJECTING: use the Write tool to write the complete revised requirements "
+            f"to `{_PROPOSAL_FILE}` first, then output the JSON verdict block.\n"
+            f"- If APPROVING: output the JSON verdict block only."
         )
 
     def _extract_fix(self, result: ValidationResult, raw_output: str) -> str | None:

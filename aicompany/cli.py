@@ -241,16 +241,20 @@ def cmd_status(project_id: str | None):
 
 @click.command("purge")
 @click.option("--all", "purge_all", is_flag=True, help="Also remove .venv/ for a full clean slate.")
-@click.confirmation_option(prompt="This will delete all company state and projects. Continue?")
+@click.confirmation_option(prompt="This will delete runtime state (state.yaml + projects/). Continue?")
 def cmd_purge(purge_all: bool):
-    """Delete all runtime state (company/ and projects/). Does not touch .venv/ unless --all."""
+    """Delete runtime state (state.yaml and projects/). Committed company defaults are preserved."""
     import shutil
 
     removed = []
-    for path in [config.COMPANY_DIR, config.PROJECTS_DIR]:
-        if path.exists():
-            shutil.rmtree(path)
-            removed.append(str(path.relative_to(config.BASE_DIR)))
+
+    if config.STATE_FILE.exists():
+        config.STATE_FILE.unlink()
+        removed.append(str(config.STATE_FILE.relative_to(config.BASE_DIR)))
+
+    if config.PROJECTS_DIR.exists():
+        shutil.rmtree(config.PROJECTS_DIR)
+        removed.append(str(config.PROJECTS_DIR.relative_to(config.BASE_DIR)))
 
     venv = config.BASE_DIR / ".venv"
     if purge_all and venv.exists():
@@ -259,7 +263,7 @@ def cmd_purge(purge_all: bool):
 
     if removed:
         for r in removed:
-            _print_ok(f"Removed: {r}/")
+            _print_ok(f"Removed: {r}")
     else:
         _print_info("Nothing to remove — already clean.")
 

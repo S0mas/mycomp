@@ -123,7 +123,7 @@ async def run_lead_delegates(
             final = await lead_agent.think(
                 f"**Your earlier brief:**\n{brief}\n\n"
                 f"**Team contributions:**\n{contrib_text}\n\n"
-                f"Synthesize into a final output."
+                f"Produce your final output now. Follow your rules exactly."
             )
         else:
             final = brief

@@ -344,19 +344,20 @@ class TestStatus:
 # ── purge ───────────────────────────────────────────────────────────────────────
 
 class TestPurge:
-    def test_purge_removes_company_and_projects(self, runner, sample_state, sample_plan):
+    def test_purge_removes_state_and_projects(self, runner, sample_state, sample_plan):
         write_state(sample_state)
         write_plan(sample_plan)
-        assert config.COMPANY_DIR.exists()
+        assert config.STATE_FILE.exists()
         assert config.PROJECTS_DIR.exists()
         result = runner.invoke(cli, ["purge"], input="y\n")
         assert result.exit_code == 0
-        assert not config.COMPANY_DIR.exists()
+        assert not config.STATE_FILE.exists()
         assert not config.PROJECTS_DIR.exists()
+        assert config.COMPANY_DIR.exists()  # committed defaults preserved
 
     def test_purge_clean_state_reports_nothing_to_remove(self, runner):
         import shutil
-        shutil.rmtree(config.COMPANY_DIR, ignore_errors=True)
+        config.STATE_FILE.unlink(missing_ok=True)
         shutil.rmtree(config.PROJECTS_DIR, ignore_errors=True)
         result = runner.invoke(cli, ["purge"], input="y\n")
         assert result.exit_code == 0
@@ -366,7 +367,7 @@ class TestPurge:
         write_state(sample_state)
         result = runner.invoke(cli, ["purge"], input="n\n")
         assert result.exit_code != 0
-        assert config.COMPANY_DIR.exists()
+        assert config.STATE_FILE.exists()
 
     def test_purge_all_also_removes_venv(self, runner):
         venv = config.BASE_DIR / ".venv"
