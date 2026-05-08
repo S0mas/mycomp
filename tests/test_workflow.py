@@ -1,10 +1,17 @@
 """Tests for aicompany/planning.py"""
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aicompany.planning import plan_and_create_project
 from aicompany import registry
 from tests.conftest import write_state, write_team, write_persons
+
+
+def _make_val_mock():
+    """Return a mock ValidationProcess instance whose run() passes the artifact through."""
+    def _passthrough(artifact, on_status=None):
+        return artifact, MagicMock(approved=True, rejected=False)
+    return MagicMock(run=AsyncMock(side_effect=_passthrough))
 
 
 MOCK_CTO = {
@@ -38,7 +45,9 @@ class TestPlanAndCreateProject:
             "skills": [],
         }
         with patch("aicompany.planning._run_cto_planning", new=AsyncMock(return_value=cto_resp)), \
-             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)):
+             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             kwargs = {"on_status": on_status} if on_status is not None else {}
             return await plan_and_create_project("Build API", **kwargs)
 
@@ -59,7 +68,9 @@ class TestPlanAndCreateProject:
         })
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_needing_new)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr):
+             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             result = await plan_and_create_project("Build API")
         assert "new_team" in result.created_teams
         mock_hr.assert_called()
@@ -69,7 +80,9 @@ class TestPlanAndCreateProject:
         mock_hr = AsyncMock()
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_using_existing)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr):
+             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             result = await plan_and_create_project("Build API")
         mock_hr.assert_not_called()
         assert result.created_teams == []
@@ -87,7 +100,9 @@ class TestPlanAndCreateProject:
         }
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_needing_new)), \
-             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)):
+             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             await plan_and_create_project("Build API", on_status=statuses.append)
         assert any("new_team" in s for s in statuses)
 

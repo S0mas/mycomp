@@ -14,8 +14,9 @@ from . import config, registry
 from .communication import create_session, run_pattern
 from .utils import extract_json_block as _extract_json_block
 from .models import (
-    Person, Plan, Requirement, SessionRules, Skill, Task, TaskInput, Team,
+    MAX_PLAN_DEPTH, Person, Plan, Requirement, SessionRules, Skill, Task, TaskInput, Team,
 )
+from .validation import RequirementsValidation, PlanValidation, ValidationError
 
 
 # ── HR system prompt ──────────────────────────────────────────────────────────
@@ -220,6 +221,56 @@ def _assemble_project(
     )
 
 
+# ── Recursive task expansion ──────────────────────────────────────────────────
+
+async def _expand_tasks_recursively(
+    raw_tasks: list[dict],
+    state_yaml: str,
+    on_status: callable,
+    depth: int = 0,
+) -> list[dict]:
+    """Expand any task that signals further decomposition via a non-empty "subtasks" key.
+
+    A task is a leaf when task.get("subtasks", []) is empty or absent.
+    Leaf tasks are returned as-is. Non-leaf tasks are recursively planned:
+      1. RequirementsValidation on the task description
+      2. CTO planning to produce a sub-plan
+      3. PlanValidation on the sub-plan
+      4. Recurse on sub-plan tasks
+
+    Recursion is capped at MAX_PLAN_DEPTH to guard against runaway LLM output.
+    """
+    if depth >= MAX_PLAN_DEPTH:
+        return raw_tasks
+
+    result: list[dict] = []
+    for task in raw_tasks:
+        subtask_specs = task.get("subtasks", [])
+        if not subtask_specs:
+            result.append(task)
+            continue
+
+        title = task.get("title", task.get("id", "?"))
+        on_status(f"Recursively planning task: {title} (depth {depth + 1})")
+
+        spec = task.get("description", task.get("title", ""))
+
+        req_val = RequirementsValidation()
+        approved_spec, _ = await req_val.run(spec, on_status=on_status)
+
+        sub_plan_dict = await _run_cto_planning(approved_spec, state_yaml, on_status)
+
+        plan_val = PlanValidation()
+        approved_sub_plan, _ = await plan_val.run(sub_plan_dict, on_status=on_status)
+
+        expanded = await _expand_tasks_recursively(
+            approved_sub_plan.get("tasks", []), state_yaml, on_status, depth + 1,
+        )
+        result.extend(expanded)
+
+    return result
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def plan_and_create_project(
@@ -228,10 +279,25 @@ async def plan_and_create_project(
 ) -> PlanResult:
     _status = on_status or (lambda msg: None)
 
+    # 1. Validate top-level requirements (fix loop embedded in RequirementsValidation)
+    req_val = RequirementsValidation()
+    approved_text, _ = await req_val.run(requirements_text, on_status=_status)
+    # ValidationError propagates to caller if rejected after max attempts
+
     state = registry.load_state()
     state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
 
-    plan_dict = await _run_cto_planning(requirements_text, state_yaml, _status)
+    # 2. CTO produces plan
+    plan_dict = await _run_cto_planning(approved_text, state_yaml, _status)
+
+    # 3. Validate the CTO plan
+    plan_val = PlanValidation()
+    plan_dict, _ = await plan_val.run(plan_dict, on_status=_status)
+
+    # 4. Recursively expand any tasks that signal further decomposition
+    plan_dict["tasks"] = await _expand_tasks_recursively(
+        plan_dict.get("tasks", []), state_yaml, _status,
+    )
 
     title = plan_dict.get("title", "Untitled Project")
     tech_stack = plan_dict.get("tech_stack", [])

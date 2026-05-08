@@ -8,14 +8,18 @@ from .policy import ValidationPolicy
 from .process import ValidationProcess
 from .result import ValidationResult
 
+_PROPOSAL_FILE = "RequirementsProposal.md"
+
 _JSON_RULES = [
     "Output ONLY a ```json block — no prose before or after.",
     'The JSON must have exactly these keys: "verdict" ("approved" or "rejected"), '
     '"summary" (one sentence), "issues" (list of strings), '
-    '"suggestions" (list of strings), '
-    '"proposed_fix" (the FULL revised requirements text if rejecting, null if approving).',
+    '"suggestions" (list of strings), "proposed_fix": null.',
     "Set verdict=approved only when requirements fully satisfy the policy.",
-    "When rejecting, proposed_fix must be the complete revised requirements text — not a diff.",
+    f"When rejecting with a fix: write the COMPLETE revised requirements text to "
+    f"`{_PROPOSAL_FILE}` in the workspace (plain text, no JSON encoding needed), "
+    f"then output the JSON verdict with proposed_fix null.",
+    "When approving or rejecting without a fix: do not write any file.",
 ]
 
 
@@ -81,8 +85,10 @@ class RequirementsValidation(ValidationProcess):
             f"## Requirements Under Review\n\n{artifact}"
         )
 
-    def _extract_fix(self, result: ValidationResult) -> str | None:
-        fix = result.proposed_fix
-        if isinstance(fix, str) and fix.strip():
-            return fix
-        return None
+    def _extract_fix(self, result: ValidationResult, raw_output: str) -> str | None:
+        proposal_path = config.BASE_DIR / _PROPOSAL_FILE
+        if not proposal_path.exists():
+            return None
+        text = proposal_path.read_text(encoding="utf-8").strip()
+        proposal_path.unlink()
+        return text if text else None

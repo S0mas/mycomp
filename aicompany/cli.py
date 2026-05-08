@@ -2,10 +2,10 @@ import asyncio
 from pathlib import Path
 
 import click
+import yaml
 
 from . import config, orchestrator, registry
 from .models import CompanyState, Person, Skill, Team
-from .seeds import default_skills, default_teams, default_requirements_policy, default_plan_policy
 from .planning import plan_and_create_project
 
 
@@ -27,44 +27,47 @@ def _print_err(msg: str) -> None:
 
 # ── init ───────────────────────────────────────────────────────────────────────
 
-def _seed_skills(skills: list[Skill]) -> None:
-    for s in skills:
-        registry.save_skill(s)
+def _build_state_from_disk() -> CompanyState:
+    """Scan committed company/ files and build a fresh CompanyState index."""
+    state = CompanyState()
 
+    skills_dir = config.SKILLS_DIR
+    if skills_dir.exists():
+        for path in sorted(skills_dir.glob("*.yaml")):
+            with path.open(encoding="utf-8") as f:
+                d = yaml.safe_load(f)
+            state.skills.append({"id": d["id"], "name": d["name"], "category": d.get("category", "")})
 
-def _seed_team(persons: list[Person], team: Team) -> None:
-    for p in persons:
-        registry.save_person(p)
-    registry.save_team(team)
+    persons_dir = config.COMPANY_DIR / "persons"
+    if persons_dir.exists():
+        for path in sorted(persons_dir.glob("*.yaml")):
+            with path.open(encoding="utf-8") as f:
+                d = yaml.safe_load(f)
+            state.persons.append({"id": d["id"], "name": d["name"], "role": d.get("role", "")})
+
+    teams_dir = config.TEAMS_DIR
+    if teams_dir.exists():
+        for path in sorted(teams_dir.glob("*.yaml")):
+            with path.open(encoding="utf-8") as f:
+                d = yaml.safe_load(f)
+            state.teams.append({"id": d["id"], "name": d["name"], "skills": d.get("skills", [])})
+
+    return state
 
 
 @click.command("init")
 def cmd_init():
-    """Bootstrap the company: create state.yaml and seed starter skills and teams."""
+    """Initialise runtime state by indexing the committed company defaults."""
     if config.STATE_FILE.exists():
         _print_warn("Company already initialised. Delete company/state.yaml to reset.")
         return
 
-    registry.save_state(CompanyState())
-    _print_ok("Created company/state.yaml")
+    state = _build_state_from_disk()
+    registry.save_state(state)
 
-    skills = default_skills()
-    _seed_skills(skills)
-    _print_ok(f"Created {len(skills)} shared skills")
-
-    for persons, team in default_teams():
-        _seed_team(persons, team)
-        member_roles = " + ".join(p.role for p in persons)
-        _print_ok(f"Created {team.id} ({member_roles})")
-
-    policy_file = config.REQUIREMENTS_POLICY_FILE
-    policy_file.write_text(default_requirements_policy(), encoding="utf-8")
-    _print_ok(f"Created requirements policy: {policy_file.relative_to(config.BASE_DIR)}")
-
-    plan_policy_file = config.PLAN_POLICY_FILE
-    plan_policy_file.write_text(default_plan_policy(), encoding="utf-8")
-    _print_ok(f"Created plan policy: {plan_policy_file.relative_to(config.BASE_DIR)}")
-
+    _print_ok(f"Indexed {len(state.skills)} skills")
+    _print_ok(f"Indexed {len(state.persons)} persons")
+    _print_ok(f"Indexed {len(state.teams)} teams")
     click.echo()
     _print_ok("Company ready. Run:")
     click.echo("    python main.py new-project <requirements.md>")

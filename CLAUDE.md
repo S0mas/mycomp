@@ -82,24 +82,24 @@ aicompany/          core package
     plan_validation.py          PlanValidation — 3 validators (architecture, traceability, feasibility);
                     validates CTO plan dict against plan_policy.md
   planning.py       async CTO planning + HR team creation + project assembly: PlanResult(project_id, plan, created_teams)
-                    plan_and_create_project: calls CTO → assembles Plan → saves to registry
-  seeds.py          CTO team + shared skills. default_requirements_policy() + default_plan_policy() seeded on init.
+                    plan_and_create_project: RequirementsValidation → CTO → PlanValidation → _expand_tasks_recursively → assemble → save
+                    _expand_tasks_recursively: tasks with non-empty "subtasks" key recurse (req-val → CTO → plan-val → expand); leaf = no subtasks
+  seeds.py          Default data for company/: skills, CTO team+persons, policy text.
+                    Used by tests (via _seed_defaults_to_disk) and as fallback reference.
                     CTO schema includes optional "subtasks" key for recursive planning signal.
   registry.py       all YAML file I/O. _load_yaml/_save_yaml helpers. save_* auto-registers in state.yaml.
                     Also: save/load requirements, RequirementTestSuites, RequirementTests.
   orchestrator.py   async execution loop + topological sort. _handle_checkpoint, _execute_task (async),
                     run_project (async, called via asyncio.run() from CLI), _execute_subtask_plan, _find_prior_output
   oversight.py      human checkpoint UI: _display_task, _prompt_decision, checkpoint()
-  validation.py     input validation: validate_requirements_text (delegates to TaskInput.validate()),
-                    validate_cto_plan (decomposed into _validate_plan_structure, _validate_tasks,
-                    _validate_task_dependencies), validate_hr_response. PATTERN_ROLES set for role validation.
-  cli.py            Click commands — thin UI layer, delegates to evaluation.py, planning.py, orchestrator.py
-                    cmd_new_project: evaluates requirements (rejects on policy violations), then plans.
-                    cmd_init: seeds policy file (company/requirements_policy.md) on first run.
+  cli.py            Click commands — thin UI layer, delegates to planning.py, orchestrator.py
+                    cmd_new_project: inline 50-char length check, then plan_and_create_project (validation embedded).
+                    cmd_init: builds state.yaml by scanning committed company/ files (skills, persons, teams).
+                              Does NOT write any files — defaults are already in the repo.
 tests/              pytest suite — 242 tests, all mocked (no API key needed).
                     Async tests use pytest-asyncio (asyncio_mode=auto in pytest.ini).
                     Pattern/orchestrator tests mock PersonAgent via FakePersonAgent.
-                    planning/cli tests use AsyncMock for _run_cto_planning, _hr_create_team, run_project.
+                    planning/cli tests patch _run_cto_planning, _hr_create_team, RequirementsValidation, PlanValidation.
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
                     README.md — navigation index for all docs
                     01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams
@@ -125,10 +125,20 @@ projects/           runtime project data — gitignored
 
 ## What's Gitignored
 
-- `company/` — runtime state (created by `init`)
+- `company/state.yaml` — runtime index (built by `init` from committed files)
 - `projects/` — generated per project
 - `.venv/` — virtual environment
 - `.env`, `.claude/settings.local.json` — secrets
+
+## What's Committed in `company/`
+
+- `company/skills/*.yaml` — default shared skills (13 built-in)
+- `company/persons/cto.yaml`, `company/persons/cto_analyst.yaml` — CTO team persons
+- `company/teams/cto_team.yaml` — CTO team definition
+- `company/requirements_policy.md` — default requirements quality policy (client-editable)
+- `company/plan_policy.md` — default plan quality policy (client-editable)
+
+HR-created teams and persons are also written to `company/` at runtime and can be committed.
 
 ---
 
@@ -140,10 +150,10 @@ projects/           runtime project data — gitignored
 - Python files only in `aicompany/` — no business logic in `main.py` or `tests/`
 - Models are pure data — no I/O or API calls in `models.py`
 - `registry.py` is the only module that reads/writes files (save_* auto-registers new IDs in state.yaml)
-- `llm.py` is the only module that calls LLM backends (via the `LLMBackend` protocol). Prompts live in `prompts/` as text files
-- `evaluation.py` owns the requirements quality gate; `planning.py` owns CTO planning, HR team creation, project assembly
+- `validation/` owns all AI-driven quality gates — ValidationProcess subclasses embed the fix-retry loop
+- `planning.py` owns CTO planning, HR team creation, recursive task expansion, and project assembly
 - `seeds.py` owns default data definitions — pure data, no I/O
-- `cli.py` is a thin UI layer — delegates to `evaluation.py`, `planning.py`, and `orchestrator.py`
+- `cli.py` is a thin UI layer — delegates to `planning.py` and `orchestrator.py`
 - No new dependencies without updating `requirements.txt` and `system-deps.txt`
 - When adding a new module, add corresponding tests in `tests/`
 

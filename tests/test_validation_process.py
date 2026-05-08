@@ -93,6 +93,13 @@ class TestValidationResult:
         result = ValidationResult.from_lead_output("not json at all")
         assert result.rejected
         assert "parse" in result.summary.lower() or "failed" in result.summary.lower()
+        assert result.parse_failed is True
+
+    def test_valid_json_has_parse_failed_false(self):
+        result = ValidationResult.from_lead_output(
+            '```json\n{"verdict": "approved", "summary": "ok", "issues": [], "suggestions": [], "proposed_fix": null}\n```'
+        )
+        assert result.parse_failed is False
 
     def test_non_dict_json_becomes_rejected(self):
         result = ValidationResult.from_lead_output("```json\n[1, 2, 3]\n```")
@@ -116,7 +123,7 @@ class _StubValidation(ValidationProcess):
     def _build_task_description(self, artifact, attempt):
         return str(artifact)
 
-    def _extract_fix(self, result):
+    def _extract_fix(self, result, raw_output):
         fix = result.proposed_fix
         return fix if isinstance(fix, str) and fix.strip() else None
 
@@ -179,6 +186,27 @@ class TestValidationProcessLoop:
                 await _StubValidation().run("original")
         assert mock_pattern.call_count == 1
 
+    async def test_retries_on_parse_failure(self):
+        mock_pattern = AsyncMock(side_effect=[
+            "not valid json at all",
+            _approved_json(),
+        ])
+        with patch("aicompany.validation.process.run_pattern", new=mock_pattern), \
+             patch("aicompany.validation.process.create_session",
+                   return_value=self._MOCK_SESSION):
+            artifact, result = await _StubValidation().run("original")
+        assert result.approved
+        assert mock_pattern.call_count == 2
+
+    async def test_parse_failure_exhausts_attempts(self):
+        mock_pattern = AsyncMock(return_value="not valid json")
+        with patch("aicompany.validation.process.run_pattern", new=mock_pattern), \
+             patch("aicompany.validation.process.create_session",
+                   return_value=self._MOCK_SESSION):
+            with pytest.raises(ValidationError):
+                await _StubValidation().run("original")
+        assert mock_pattern.call_count == 3
+
     async def test_on_status_called(self):
         statuses = []
         with patch("aicompany.validation.process.run_pattern",
@@ -226,25 +254,30 @@ class TestRequirementsValidation:
         desc = val._build_task_description("text", 1)
         assert "[Attempt" not in desc
 
-    def test_extract_fix_returns_string(self):
+    def test_extract_fix_reads_proposal_file(self):
+        proposal = config.BASE_DIR / "RequirementsProposal.md"
+        proposal.write_text("Revised requirements here.\nMore text.", encoding="utf-8")
         val = RequirementsValidation()
-        result = ValidationResult(verdict="rejected", proposed_fix="Better requirements")
-        assert val._extract_fix(result) == "Better requirements"
+        result = ValidationResult(verdict="rejected")
+        assert val._extract_fix(result, "") == "Revised requirements here.\nMore text."
 
-    def test_extract_fix_returns_none_for_empty_string(self):
+    def test_extract_fix_deletes_proposal_file_after_read(self):
+        proposal = config.BASE_DIR / "RequirementsProposal.md"
+        proposal.write_text("Some fix", encoding="utf-8")
         val = RequirementsValidation()
-        result = ValidationResult(verdict="rejected", proposed_fix="")
-        assert val._extract_fix(result) is None
+        val._extract_fix(ValidationResult(verdict="rejected"), "")
+        assert not proposal.exists()
 
-    def test_extract_fix_returns_none_for_dict(self):
-        val = RequirementsValidation()
-        result = ValidationResult(verdict="rejected", proposed_fix={"key": "val"})
-        assert val._extract_fix(result) is None
-
-    def test_extract_fix_returns_none_for_none(self):
+    def test_extract_fix_returns_none_when_no_file(self):
         val = RequirementsValidation()
         result = ValidationResult(verdict="rejected", proposed_fix=None)
-        assert val._extract_fix(result) is None
+        assert val._extract_fix(result, "") is None
+
+    def test_extract_fix_returns_none_for_empty_file(self):
+        proposal = config.BASE_DIR / "RequirementsProposal.md"
+        proposal.write_text("   ", encoding="utf-8")
+        val = RequirementsValidation()
+        assert val._extract_fix(ValidationResult(verdict="rejected"), "") is None
 
 
 # ── PlanValidation ─────────────────────────────────────────────────────────────
@@ -281,26 +314,26 @@ class TestPlanValidation:
         val = PlanValidation()
         plan = {"title": "Fixed", "tasks": []}
         result = ValidationResult(verdict="rejected", proposed_fix=plan)
-        assert val._extract_fix(result) == plan
+        assert val._extract_fix(result, "") == plan
 
     def test_extract_fix_parses_json_string(self):
         val = PlanValidation()
         plan_str = '{"title": "Fixed", "tasks": []}'
         result = ValidationResult(verdict="rejected", proposed_fix=plan_str)
-        extracted = val._extract_fix(result)
+        extracted = val._extract_fix(result, "")
         assert extracted == {"title": "Fixed", "tasks": []}
 
     def test_extract_fix_returns_none_for_plain_text(self):
         val = PlanValidation()
         result = ValidationResult(verdict="rejected", proposed_fix="just text")
-        assert val._extract_fix(result) is None
+        assert val._extract_fix(result, "") is None
 
     def test_extract_fix_returns_none_for_empty_dict(self):
         val = PlanValidation()
         result = ValidationResult(verdict="rejected", proposed_fix={})
-        assert val._extract_fix(result) is None
+        assert val._extract_fix(result, "") is None
 
     def test_extract_fix_returns_none_for_none(self):
         val = PlanValidation()
         result = ValidationResult(verdict="rejected", proposed_fix=None)
-        assert val._extract_fix(result) is None
+        assert val._extract_fix(result, "") is None

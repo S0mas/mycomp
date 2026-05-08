@@ -1,5 +1,5 @@
 category: practice
-created_at: '2026-05-04T20:10:55.519950+00:00'
+created_at: '2026-05-08T17:30:02.981232+00:00'
 id: rest_api
 knowledge:
 - 'Use proper HTTP methods: GET for reads, POST for creates, PUT/PATCH for updates'

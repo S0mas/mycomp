@@ -46,8 +46,8 @@ class ValidationProcess(abc.ABC):
         """Format artifact + policy for the validation session."""
 
     @abc.abstractmethod
-    def _extract_fix(self, result: ValidationResult) -> Any | None:
-        """Return the next artifact from result.proposed_fix, or None if unusable."""
+    def _extract_fix(self, result: ValidationResult, raw_output: str) -> Any | None:
+        """Return the next artifact from result/raw_output, or None if unusable."""
 
     async def run(
         self,
@@ -88,7 +88,11 @@ class ValidationProcess(abc.ABC):
                 _status(f"{self.__class__.__name__}: approved on attempt {attempt}")
                 return artifact, last_result
 
-            fix = self._extract_fix(last_result)
+            if last_result.parse_failed:
+                _status(f"{self.__class__.__name__}: parse error on attempt {attempt} — retrying")
+                continue
+
+            fix = self._extract_fix(last_result, raw_output)
             if fix is None:
                 raise ValidationError(
                     f"{self.__class__.__name__} rejected — no usable fix provided: "

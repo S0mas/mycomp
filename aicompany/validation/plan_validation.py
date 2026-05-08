@@ -93,7 +93,7 @@ class PlanValidation(ValidationProcess):
             f"## Plan Under Review\n\n```json\n{plan_json}\n```"
         )
 
-    def _extract_fix(self, result: ValidationResult) -> dict | None:
+    def _extract_fix(self, result: ValidationResult, raw_output: str) -> dict | None:
         fix = result.proposed_fix
         if isinstance(fix, dict) and fix:
             return fix

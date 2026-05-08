@@ -11,6 +11,7 @@ class ValidationResult:
     issues: list[str] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
     proposed_fix: Any = None               # str (requirements) or dict (plan); None if approved
+    parse_failed: bool = False             # True when lead output could not be parsed
 
     @property
     def approved(self) -> bool:
@@ -49,4 +50,5 @@ class ValidationResult:
                 summary=f"Failed to parse validation output: {exc}",
                 issues=["Lead output was not valid JSON"],
                 proposed_fix=None,
+                parse_failed=True,
             )

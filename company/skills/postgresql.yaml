@@ -1,5 +1,5 @@
 category: tool
-created_at: '2026-05-04T20:10:55.519942+00:00'
+created_at: '2026-05-08T17:30:02.981222+00:00'
 id: postgresql
 knowledge:
 - Use migrations (Alembic) for schema changes — never raw DDL in code

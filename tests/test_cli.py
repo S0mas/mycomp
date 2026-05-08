@@ -14,8 +14,15 @@ All agent calls are mocked — no API key needed.
 """
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from click.testing import CliRunner
+
+
+def _make_val_mock():
+    """Return a mock ValidationProcess instance whose run() passes the artifact through."""
+    def _passthrough(artifact, on_status=None):
+        return artifact, MagicMock(approved=True, rejected=False)
+    return MagicMock(run=AsyncMock(side_effect=_passthrough))
 
 import aicompany.config as config
 from aicompany.cli import cli
@@ -68,20 +75,53 @@ def requirements_file(tmp_path):
 
 # ── init ───────────────────────────────────────────────────────────────────────
 
+def _seed_defaults_to_disk():
+    """Write default company files to the (isolated) dirs, simulating a fresh clone."""
+    import yaml as _yaml
+    from aicompany.seeds import default_skills, default_teams, default_requirements_policy, default_plan_policy
+
+    config.SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    for skill in default_skills():
+        with (config.SKILLS_DIR / f"{skill.id}.yaml").open("w") as f:
+            _yaml.dump(skill.to_dict(), f, default_flow_style=False)
+
+    persons_dir = config.COMPANY_DIR / "persons"
+    persons_dir.mkdir(parents=True, exist_ok=True)
+    config.TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+    for persons, team in default_teams():
+        for person in persons:
+            with (persons_dir / f"{person.id}.yaml").open("w") as f:
+                _yaml.dump(person.to_dict(), f, default_flow_style=False)
+        with (config.TEAMS_DIR / f"{team.id}.yaml").open("w") as f:
+            _yaml.dump(team.to_dict(), f, default_flow_style=False)
+
+    config.REQUIREMENTS_POLICY_FILE.write_text(default_requirements_policy(), encoding="utf-8")
+    config.PLAN_POLICY_FILE.write_text(default_plan_policy(), encoding="utf-8")
+
+
 class TestInit:
     def test_creates_state_file(self, runner):
         result = runner.invoke(cli, ["init"])
         assert result.exit_code == 0
         assert config.STATE_FILE.exists()
 
-    def test_seeds_cto_team(self, runner):
+    def test_indexes_skills_from_disk(self, runner):
+        _seed_defaults_to_disk()
+        runner.invoke(cli, ["init"])
+        state = registry.load_state()
+        assert len(state.skills) > 0
+
+    def test_indexes_cto_team_from_disk(self, runner):
+        _seed_defaults_to_disk()
         runner.invoke(cli, ["init"])
         state = registry.load_state()
         assert "cto_team" in state.team_ids()
 
-    def test_team_yaml_file_created(self, runner):
+    def test_indexes_cto_persons_from_disk(self, runner):
+        _seed_defaults_to_disk()
         runner.invoke(cli, ["init"])
-        assert (config.TEAMS_DIR / "cto_team.yaml").exists()
+        state = registry.load_state()
+        assert "cto" in state.person_ids()
 
     def test_idempotent_second_run_warns(self, runner):
         runner.invoke(cli, ["init"])
@@ -89,11 +129,12 @@ class TestInit:
         assert result.exit_code == 0
         assert "already initialised" in result.output
 
-    def test_creates_requirements_policy_file(self, runner):
-        runner.invoke(cli, ["init"])
-        assert config.REQUIREMENTS_POLICY_FILE.exists()
-        content = config.REQUIREMENTS_POLICY_FILE.read_text()
-        assert "acceptance criteria" in content.lower()
+    def test_empty_dirs_produce_empty_state(self, runner):
+        result = runner.invoke(cli, ["init"])
+        assert result.exit_code == 0
+        state = registry.load_state()
+        assert state.skills == []
+        assert state.teams == []
 
 
 # ── new-project ────────────────────────────────────────────────────────────────
@@ -105,7 +146,9 @@ class TestNewProject:
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_response or MOCK_CTO_RESPONSE)), \
              patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=hr_response or MOCK_HR_RESPONSE)):
+                   new=AsyncMock(return_value=hr_response or MOCK_HR_RESPONSE)), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             result = runner.invoke(cli, ["new-project", requirements_file])
         return result
 
@@ -131,12 +174,15 @@ class TestNewProject:
         assert "proj_" in result.output
 
     def test_no_hr_call_when_team_exists(self, runner, requirements_file):
+        _seed_defaults_to_disk()
         runner.invoke(cli, ["init"])
         mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
         cto_using_seeded = {**MOCK_CTO_RESPONSE, "teams_required": ["cto_team"]}
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=cto_using_seeded)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr):
+             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             runner.invoke(cli, ["new-project", requirements_file])
         mock_hr.assert_not_called()
 
@@ -145,7 +191,9 @@ class TestNewProject:
         mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
         with patch("aicompany.planning._run_cto_planning",
                    new=AsyncMock(return_value=MOCK_CTO_RESPONSE)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr):
+             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             runner.invoke(cli, ["new-project", requirements_file])
         mock_hr.assert_called_once()
 
@@ -161,7 +209,9 @@ class TestNewProject:
         mock_cto = AsyncMock(return_value=MOCK_CTO_RESPONSE)
         with patch("aicompany.planning._run_cto_planning", new=mock_cto), \
              patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)):
+                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)), \
+             patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
             runner.invoke(cli, ["new-project", requirements_file])
         mock_cto.assert_called_once()
 

@@ -1,5 +1,5 @@
 category: framework
-created_at: '2026-05-04T20:10:55.519947+00:00'
+created_at: '2026-05-08T17:30:02.981228+00:00'
 id: nextjs
 knowledge:
 - Use app router (app/) not pages router for new projects
