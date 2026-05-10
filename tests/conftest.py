@@ -53,13 +53,13 @@ def make_task_input(spec: str = "Do something", context: str = "") -> TaskInput:
     return TaskInput(specification=spec, context=context)
 
 
-def make_leaf_plan(title: str = "", spec: str = "", plan_id: str = "") -> Plan:
+def make_leaf_plan(title: str = "", spec: str = "", plan_id: str = "", requirements: list | None = None) -> Plan:
     """Minimal leaf Plan (no subtasks) for use in tests."""
     return Plan(
         id=plan_id,
         title=title or "leaf plan",
         input=TaskInput(specification=spec),
-        requirements=[],
+        requirements=requirements or [],
         tasks=[],
     )
 
@@ -72,6 +72,7 @@ def make_stub(
     depended_on_by: list | None = None,
     is_checkpoint: bool = False,
     status: str = "pending",
+    output_file: str = "",
 ) -> TaskStub:
     """Minimal TaskStub for use in tests."""
     return TaskStub(
@@ -82,6 +83,7 @@ def make_stub(
         depended_on_by=depended_on_by or [],
         is_checkpoint=is_checkpoint,
         status=status,
+        output_file=output_file,
     )
 
 

@@ -430,3 +430,87 @@ class TestSubtaskCheckpointAndPersistence:
         sub_map = {s.id: s for s in loaded.tasks}
         # sub_001 fails (agent error propagates up before we can persist), sub_002 is skipped
         assert sub_map["sub_002"].status in ("pending", "failed")
+
+
+# ── _build_project_context ────────────────────────────────────────────────────
+
+
+class TestBuildProjectContext:
+    from aicompany.orchestrator import _build_project_context
+
+    def _stub(self, title="Do work", depends_on=None, depended_on_by=None, output_file=""):
+        return make_stub("task_001", title, team="eng",
+                         depends_on=depends_on or [],
+                         depended_on_by=depended_on_by or [],
+                         output_file=output_file)
+
+    def _plan(self, requirements=None):
+        return make_leaf_plan(title="Do work", plan_id="task_001", requirements=requirements or [])
+
+    def test_includes_project_title(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub()
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"),
+                                     project_title="URL Shortener")
+        assert "URL Shortener" in ctx
+
+    def test_includes_tech_stack(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub()
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"),
+                                     tech_stack=["Python", "PostgreSQL"])
+        assert "Python" in ctx
+        assert "PostgreSQL" in ctx
+
+    def test_omits_project_title_when_empty(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub()
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"), project_title="")
+        assert "**Project**" not in ctx
+
+    def test_omits_tech_stack_when_none(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub()
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"), tech_stack=None)
+        assert "Tech stack" not in ctx
+
+    def test_resolves_dep_ids_to_titles(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub(depends_on=["task_002"])
+        dep_stub = make_stub("task_002", "Design Schema", team="eng")
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"),
+                                     id_to_stub={"task_002": dep_stub})
+        assert "task_002 (Design Schema)" in ctx
+
+    def test_dep_with_output_file_includes_path(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub(depends_on=["task_002"])
+        dep_stub = make_stub("task_002", "Design Schema", team="eng",
+                             output_file="outputs/task_002.md")
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"),
+                                     id_to_stub={"task_002": dep_stub})
+        assert "outputs/task_002.md" in ctx
+
+    def test_dep_without_output_file_no_path(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub(depends_on=["task_002"])
+        dep_stub = make_stub("task_002", "Design Schema", team="eng", output_file="")
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"),
+                                     id_to_stub={"task_002": dep_stub})
+        assert "task_002 (Design Schema)" in ctx
+        assert "→" not in ctx
+
+    def test_falls_back_to_bare_id_when_not_in_map(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub(depends_on=["task_999"])
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"), id_to_stub={})
+        assert "task_999" in ctx
+        assert "(" not in ctx.split("**Depends on**")[1].split("\n")[0]
+
+    def test_resolves_depended_on_by_titles(self):
+        from aicompany.orchestrator import _build_project_context
+        stub = self._stub(depended_on_by=["task_003"])
+        downstream = make_stub("task_003", "Run Tests", team="eng")
+        ctx = _build_project_context(stub, self._plan(), Path("/ws"),
+                                     id_to_stub={"task_003": downstream})
+        assert "task_003 (Run Tests)" in ctx

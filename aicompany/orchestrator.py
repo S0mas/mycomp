@@ -41,13 +41,32 @@ def _topological_sort(stubs: list) -> list:
     return result
 
 
-def _build_project_context(stub: TaskStub, task_plan: Plan, workspace: Path) -> str:
-    """Minimal context for a task: its own requirements + workspace path."""
-    lines = [f"**Task**: {stub.title}"]
+def _build_project_context(
+    stub: TaskStub,
+    task_plan: Plan,
+    workspace: Path,
+    id_to_stub: "dict[str, TaskStub] | None" = None,
+    project_title: str = "",
+    tech_stack: "list[str] | None" = None,
+) -> str:
+    lines = []
+    if project_title:
+        lines.append(f"**Project**: {project_title}")
+    if tech_stack:
+        lines.append(f"**Tech stack**: {', '.join(tech_stack)}")
+    lines.append(f"**Task**: {stub.title}")
+
+    def _resolve(dep_id: str) -> str:
+        if id_to_stub and dep_id in id_to_stub:
+            s = id_to_stub[dep_id]
+            suffix = f" → `{s.output_file}`" if s.output_file else ""
+            return f"{dep_id} ({s.title}){suffix}"
+        return dep_id
+
     if stub.depends_on:
-        lines.append(f"**Depends on**: {', '.join(stub.depends_on)}")
+        lines.append(f"**Depends on**: {', '.join(_resolve(d) for d in stub.depends_on)}")
     if stub.depended_on_by:
-        lines.append(f"**Required by**: {', '.join(stub.depended_on_by)}")
+        lines.append(f"**Required by**: {', '.join(_resolve(d) for d in stub.depended_on_by)}")
     if workspace:
         lines.append(f"**Workspace**: `{workspace}`")
 
@@ -107,7 +126,7 @@ async def _execute_subtask_plan(
             if action == "rejected":
                 continue
 
-        sub_output = await _execute_task(sub_stub, project_id, sub_done, workspace)
+        sub_output = await _execute_task(sub_stub, project_id, sub_done, workspace, task_plan.tasks)
         registry.save_output(project_id, sub_stub.id, sub_output)
         sub_stub.status = "done"
         sub_done.add(sub_stub.id)
@@ -123,6 +142,7 @@ def _log(project_id: str, task_id: str, level: str, message: str) -> None:
 
 async def _execute_task(
     stub: TaskStub, project_id: str, completed_ids: set, workspace: Path,
+    sibling_stubs: list | None = None,
 ) -> str:
     """Load task plan, build context, run communication pattern. Returns output text."""
     task_plan = registry.load_task_plan(project_id, stub.id)
@@ -143,7 +163,14 @@ async def _execute_task(
         return result
     session.add_message = _add_and_save
 
-    context = _build_project_context(stub, task_plan, workspace)
+    root_plan = registry.load_plan(project_id)
+    id_to_stub = {s.id: s for s in (sibling_stubs or root_plan.tasks)}
+    context = _build_project_context(
+        stub, task_plan, workspace,
+        id_to_stub=id_to_stub,
+        project_title=root_plan.title,
+        tech_stack=root_plan.tech_stack,
+    )
 
     resuming = existing is not None and len(existing.messages) > 0
     registry.append_task_log(project_id, stub.id, "INFO",
@@ -232,7 +259,7 @@ async def run_project(project_id: str, dry_run: bool = False) -> None:
             lambda level, msg, _tid=stub.id: _tlog(_tid, level, msg)
         )
         try:
-            output = await _execute_task(stub, project_id, completed_ids, workspace)
+            output = await _execute_task(stub, project_id, completed_ids, workspace, plan.tasks)
         except Exception as exc:
             _tlog(stub.id, "ERROR", f"{type(exc).__name__}: {exc}")
             stub.status = "failed"

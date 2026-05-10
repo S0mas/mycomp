@@ -246,7 +246,7 @@ results already computed in the loop (no extra disk reads).
 
 ---
 
-## Issue 10 — Leaf task context is too thin for teams with dependencies
+## Issue 10 — Leaf task context is too thin for teams with dependencies ✅ FIXED
 
 **Location**: `aicompany/orchestrator.py` — `_build_project_context()`
 
@@ -255,14 +255,11 @@ titles), workspace path, and scoped requirements. The project title and tech sta
 Dependency IDs tell teams nothing about what those tasks produced or where to find their
 outputs.
 
-**Impact**: Teams with dependencies must explore the workspace blindly. Every agent spends
-early turns on discovery that structured context could provide in advance.
-
-**Design notes for the fix**:
-- Include project title and tech stack (load from root plan or task plan).
-- Load stub titles for each dependency ID and include them: "Depends on: task_001 (Design
-  schema), task_002 (Implement auth middleware)" instead of "Depends on: task_001, task_002".
-- Optionally include the workspace relative paths of dependency outputs when they exist.
+**Fix**: `_build_project_context` now accepts `id_to_stub`, `project_title`, and `tech_stack`.
+Project title and tech stack are loaded from the root plan in `_execute_task`. Sibling stubs
+are passed from the caller (`plan.tasks` in `run_project`, `task_plan.tasks` in
+`_execute_subtask_plan`) so dep IDs are resolved to `task_001 (Design Schema)` form.
+If a completed dep stub has an `output_file`, the path is appended: `task_001 (Design Schema) → \`outputs/task_001.md\``.
 
 ---
 
