@@ -1,4 +1,4 @@
-from .models import Task
+from .models import TaskStub
 
 try:
     from rich.console import Console
@@ -24,19 +24,18 @@ def _rule(title: str = "") -> None:
         print(f"\n{'─' * 60}  {title}")
 
 
-def _display_task(task: Task, prior_output: str | None) -> None:
+def _display_task(stub: TaskStub, prior_output: str | None) -> None:
     """Render task details and prior output preview."""
-    _rule(f"  CHECKPOINT — {task.title}  ")
+    _rule(f"  CHECKPOINT — {stub.title}  ")
     _print()
     if _rich:
         _console.print(Panel(
-            f"[bold]{task.title}[/bold]\n\n{task.input.specification}",
-            title=f"[yellow]Task {task.id}[/yellow]",
+            f"[bold]{stub.title}[/bold]",
+            title=f"[yellow]Task {stub.id}[/yellow]",
             border_style="yellow",
         ))
     else:
-        print(f"Task: {task.id} — {task.title}")
-        print(f"\n{task.input.specification}\n")
+        print(f"Task: {stub.id} — {stub.title}")
 
     if prior_output:
         _rule("  Prior task output (preview)  ")
@@ -79,12 +78,12 @@ def _collect_modified_instructions() -> str:
     return "\n".join(lines).strip()
 
 
-def checkpoint(task: Task, prior_output: str | None, project_id: str) -> tuple[str, str]:
+def checkpoint(stub: TaskStub, prior_output: str | None, project_id: str) -> tuple[str, str]:
     """
     Pause execution, show task context, and ask the user to approve/reject/modify.
     Returns (action, modified_instructions).
     """
-    _display_task(task, prior_output)
+    _display_task(stub, prior_output)
     action = _prompt_decision()
 
     if action == "rejected":

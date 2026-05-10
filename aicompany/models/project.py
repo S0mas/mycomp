@@ -54,24 +54,63 @@ class TaskInput:
 
 
 @dataclass
+class TaskStub:
+    """
+    Minimal task entry stored in a parent plan.yaml.
+
+    Full task input and requirements live in tasks/{id}/plan.yaml on disk.
+    depended_on_by is the reverse index of depends_on — tasks that wait for this one.
+    """
+    id: str
+    title: str
+    assigned_team: str
+    depends_on: list = field(default_factory=list)
+    depended_on_by: list = field(default_factory=list)
+    is_checkpoint: bool = False
+    status: str = "pending"
+    output_file: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> TaskStub:
+        return cls(
+            id=d["id"],
+            title=d["title"],
+            assigned_team=d.get("assigned_team", ""),
+            depends_on=d.get("depends_on", []),
+            depended_on_by=d.get("depended_on_by", []),
+            is_checkpoint=d.get("is_checkpoint", False),
+            status=d.get("status", "pending"),
+            output_file=d.get("output_file", ""),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "assigned_team": self.assigned_team,
+            "depends_on": self.depends_on,
+            "depended_on_by": self.depended_on_by,
+            "is_checkpoint": self.is_checkpoint,
+            "status": self.status,
+            "output_file": self.output_file,
+        }
+
+
+@dataclass
 class Plan:
     """
-    The plan for the Task that owns it — created by a team from TaskInput.
+    Plan for any node in the task tree — identical structure at all depths.
 
-    Detailed about the owning task (input + requirements).
-    High-level about subtasks (if any) — each subtask owns its own Plan.
-
-    has_subtasks == False: task is executed directly by its assigned_team.
-    has_subtasks == True:  task is realized by executing plan.tasks in order.
-
-    Serialization passes _depth through to_dict/from_dict to enforce MAX_PLAN_DEPTH
-    and catch circular references without silently overflowing the call stack.
+    id:            project_id at the root node; task_id at every other depth.
+    tasks:         list of TaskStub — lightweight references to child tasks.
+                   Full child plans live in tasks/{id}/plan.yaml on disk.
+    has_subtasks:  True → this node is composite; False → leaf (team executes directly).
     """
-    project_id: str
+    id: str
     title: str
     input: TaskInput
     requirements: list = field(default_factory=list)
-    tasks: list = field(default_factory=list)
+    tasks: list = field(default_factory=list)   # list[TaskStub]
     tech_stack: list = field(default_factory=list)
     teams_required: list = field(default_factory=list)
     status: str = "pending"
@@ -93,12 +132,14 @@ class Plan:
             plan_input = TaskInput.from_dict(d["input"])
         else:
             plan_input = TaskInput(specification=d.get("requirements_text", ""))
+        # Support both "id" (new) and "project_id" (legacy) keys
+        plan_id = d.get("id", d.get("project_id", ""))
         return cls(
-            project_id=d.get("project_id", ""),
+            id=plan_id,
             title=d.get("title", ""),
             input=plan_input,
             requirements=[Requirement.from_dict(r) for r in d.get("requirements", [])],
-            tasks=[Task.from_dict(t, _depth + 1) for t in d.get("tasks", [])],
+            tasks=[TaskStub.from_dict(t) for t in d.get("tasks", [])],
             tech_stack=d.get("tech_stack", []),
             teams_required=d.get("teams_required", []),
             status=d.get("status", "pending"),
@@ -113,11 +154,11 @@ class Plan:
                 "Check for circular references in plan data."
             )
         return {
-            "project_id": self.project_id,
+            "id": self.id,
             "title": self.title,
             "input": self.input.to_dict(),
             "requirements": [r.to_dict() for r in self.requirements],
-            "tasks": [t.to_dict(_depth + 1) for t in self.tasks],
+            "tasks": [t.to_dict() for t in self.tasks],
             "tech_stack": self.tech_stack,
             "teams_required": self.teams_required,
             "status": self.status,
@@ -125,15 +166,11 @@ class Plan:
             "decisions_log": self.decisions_log,
         }
 
-    def task_by_id(self, task_id: str) -> Task | None:
-        """Iterative BFS — avoids recursive descent into arbitrarily deep plan trees."""
-        queue = list(self.tasks)
-        while queue:
-            task = queue.pop(0)
-            if task.id == task_id:
-                return task
-            if task.plan.has_subtasks:
-                queue.extend(task.plan.tasks)
+    def task_by_id(self, task_id: str) -> TaskStub | None:
+        """Return the TaskStub with the given id, or None."""
+        for stub in self.tasks:
+            if stub.id == task_id:
+                return stub
         return None
 
     def requirement_by_id(self, req_id: str) -> Requirement | None:
@@ -148,73 +185,6 @@ class Plan:
                 if s.id == sub_id:
                     return s
         return None
-
-
-@dataclass
-class Task:
-    """
-    A unit of work at any level of the hierarchy.
-
-    input: what this task needs to accomplish + parent context for alignment.
-    plan:  always present — detailed about this task, high-level about subtasks.
-    """
-    id: str
-    title: str
-    input: TaskInput
-    assigned_team: str
-    plan: Plan
-    depends_on: list = field(default_factory=list)
-    status: str = "pending"
-    is_checkpoint: bool = False
-    output_file: str = ""
-
-    @classmethod
-    def from_dict(cls, d: dict, _depth: int = 0) -> Task:
-        if _depth > MAX_PLAN_DEPTH:
-            raise ValueError(
-                f"Task nesting exceeds maximum depth ({MAX_PLAN_DEPTH}). "
-                "Check for circular references in plan data."
-            )
-        if "input" in d and isinstance(d["input"], dict):
-            task_input = TaskInput.from_dict(d["input"])
-        else:
-            task_input = TaskInput(specification=d.get("description", ""))
-
-        if "plan" in d and isinstance(d["plan"], dict):
-            task_plan = Plan.from_dict(d["plan"], _depth)
-        else:
-            task_plan = Plan(
-                project_id="",
-                title=d.get("title", ""),
-                input=task_input,
-                requirements=[],
-                tasks=[],
-            )
-
-        return cls(
-            id=d["id"],
-            title=d["title"],
-            input=task_input,
-            assigned_team=d["assigned_team"],
-            plan=task_plan,
-            depends_on=d.get("depends_on", []),
-            status=d.get("status", "pending"),
-            is_checkpoint=d.get("is_checkpoint", False),
-            output_file=d.get("output_file", ""),
-        )
-
-    def to_dict(self, _depth: int = 0) -> dict:
-        return {
-            "id": self.id,
-            "title": self.title,
-            "input": self.input.to_dict(),
-            "assigned_team": self.assigned_team,
-            "plan": self.plan.to_dict(_depth),
-            "depends_on": self.depends_on,
-            "status": self.status,
-            "is_checkpoint": self.is_checkpoint,
-            "output_file": self.output_file,
-        }
 
 
 ProjectPlan = Plan

@@ -139,16 +139,23 @@ class TestInit:
 
 # ── new-project ────────────────────────────────────────────────────────────────
 
+def _make_cto_mock(response=None):
+    return MagicMock(run=AsyncMock(return_value=response or MOCK_CTO_RESPONSE))
+
+
+def _make_hr_mock(response=None):
+    return MagicMock(run=AsyncMock(return_value=response or MOCK_HR_RESPONSE))
+
+
 class TestNewProject:
     def _run_new_project(self, runner, requirements_file,
                          cto_response=None, hr_response=None):
         runner.invoke(cli, ["init"])
-        with patch("aicompany.planning._run_cto_planning",
-                   new=AsyncMock(return_value=cto_response or MOCK_CTO_RESPONSE)), \
-             patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=hr_response or MOCK_HR_RESPONSE)), \
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock(cto_response)), \
+             patch("aicompany.planning.HRTeamCreation", return_value=_make_hr_mock(hr_response)), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             result = runner.invoke(cli, ["new-project", requirements_file])
         return result
 
@@ -176,26 +183,27 @@ class TestNewProject:
     def test_no_hr_call_when_team_exists(self, runner, requirements_file):
         _seed_defaults_to_disk()
         runner.invoke(cli, ["init"])
-        mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
+        mock_hr_cls = MagicMock()
         cto_using_seeded = {**MOCK_CTO_RESPONSE, "teams_required": ["cto_team"]}
-        with patch("aicompany.planning._run_cto_planning",
-                   new=AsyncMock(return_value=cto_using_seeded)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock(cto_using_seeded)), \
+             patch("aicompany.planning.HRTeamCreation", mock_hr_cls), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             runner.invoke(cli, ["new-project", requirements_file])
-        mock_hr.assert_not_called()
+        mock_hr_cls.assert_not_called()
 
     def test_hr_called_for_missing_team(self, runner, requirements_file):
         runner.invoke(cli, ["init"])
-        mock_hr = AsyncMock(return_value=MOCK_HR_RESPONSE)
-        with patch("aicompany.planning._run_cto_planning",
-                   new=AsyncMock(return_value=MOCK_CTO_RESPONSE)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+        mock_hr_instance = _make_hr_mock()
+        mock_hr_cls = MagicMock(return_value=mock_hr_instance)
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock()), \
+             patch("aicompany.planning.HRTeamCreation", mock_hr_cls), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             runner.invoke(cli, ["new-project", requirements_file])
-        mock_hr.assert_called_once()
+        mock_hr_instance.run.assert_called_once()
 
     def test_requirements_md_copied_into_project(self, runner, requirements_file):
         self._run_new_project(runner, requirements_file)
@@ -206,14 +214,15 @@ class TestNewProject:
 
     def test_cto_called(self, runner, requirements_file):
         runner.invoke(cli, ["init"])
-        mock_cto = AsyncMock(return_value=MOCK_CTO_RESPONSE)
-        with patch("aicompany.planning._run_cto_planning", new=mock_cto), \
-             patch("aicompany.planning._hr_create_team",
-                   new=AsyncMock(return_value=MOCK_HR_RESPONSE)), \
+        mock_cto_instance = _make_cto_mock()
+        mock_cto_cls = MagicMock(return_value=mock_cto_instance)
+        with patch("aicompany.planning.CTOPlanning", mock_cto_cls), \
+             patch("aicompany.planning.HRTeamCreation", return_value=_make_hr_mock()), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             runner.invoke(cli, ["new-project", requirements_file])
-        mock_cto.assert_called_once()
+        mock_cto_instance.run.assert_called_once()
 
     def test_short_requirements_rejected(self, runner, tmp_path):
         short_req = tmp_path / "short.md"
@@ -235,9 +244,9 @@ class TestRun:
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
             mock_orch.run_project = AsyncMock()
-            runner.invoke(cli, ["run", sample_plan.project_id])
+            runner.invoke(cli, ["run", sample_plan.id])
             mock_orch.run_project.assert_called_once_with(
-                sample_plan.project_id, dry_run=False)
+                sample_plan.id, dry_run=False)
 
     def test_dry_run_flag(self, runner, sample_state, sample_team,
                           sample_plan, sample_persons):
@@ -248,9 +257,9 @@ class TestRun:
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
             mock_orch.run_project = AsyncMock()
-            runner.invoke(cli, ["run", "--dry-run", sample_plan.project_id])
+            runner.invoke(cli, ["run", "--dry-run", sample_plan.id])
             mock_orch.run_project.assert_called_once_with(
-                sample_plan.project_id, dry_run=True)
+                sample_plan.id, dry_run=True)
 
     def test_orchestrator_error_exits_nonzero(self, runner, sample_state,
                                                sample_team, sample_plan, sample_persons):
@@ -267,7 +276,7 @@ class TestRun:
         with patch("aicompany.cli.orchestrator") as mock_orch:
             mock_orch.run_project = _raise
             mock_orch.OrchestratorError = OrchestratorError
-            result = runner.invoke(cli, ["run", sample_plan.project_id])
+            result = runner.invoke(cli, ["run", sample_plan.id])
         assert result.exit_code == 1
 
 
@@ -285,16 +294,16 @@ class TestRetry:
 
         with patch("aicompany.cli.orchestrator") as mock_orch:
             mock_orch.run_project = AsyncMock()
-            runner.invoke(cli, ["retry", sample_plan.project_id])
+            runner.invoke(cli, ["retry", sample_plan.id])
             mock_orch.run_project.assert_called_once()
 
-        plan = registry.load_plan(sample_plan.project_id)
+        plan = registry.load_plan(sample_plan.id)
         assert plan.tasks[1].status == "pending"
         assert plan.tasks[2].status == "pending"
 
     def test_nothing_to_retry_when_no_failures(self, runner, sample_plan):
         write_plan(sample_plan)
-        result = runner.invoke(cli, ["retry", sample_plan.project_id])
+        result = runner.invoke(cli, ["retry", sample_plan.id])
         assert result.exit_code == 0
         assert "nothing to retry" in result.output.lower()
 
@@ -314,11 +323,11 @@ class TestStatus:
     def test_lists_projects(self, runner, sample_plan):
         write_plan(sample_plan)
         result = runner.invoke(cli, ["status"])
-        assert sample_plan.project_id in result.output
+        assert sample_plan.id in result.output
 
     def test_shows_task_breakdown(self, runner, sample_plan):
         write_plan(sample_plan)
-        result = runner.invoke(cli, ["status", sample_plan.project_id])
+        result = runner.invoke(cli, ["status", sample_plan.id])
         assert result.exit_code == 0
         assert "task_001" in result.output
         assert "task_002" in result.output
@@ -330,14 +339,14 @@ class TestStatus:
              "timestamp": "2026-01-01T10:00:00+00:00"},
         ]
         write_plan(sample_plan)
-        result = runner.invoke(cli, ["status", sample_plan.project_id])
+        result = runner.invoke(cli, ["status", sample_plan.id])
         assert result.exit_code == 0
         assert "task_002" in result.output
         assert "APPROVED" in result.output
 
     def test_no_decisions_section_when_empty(self, runner, sample_plan):
         write_plan(sample_plan)
-        result = runner.invoke(cli, ["status", sample_plan.project_id])
+        result = runner.invoke(cli, ["status", sample_plan.id])
         assert "Checkpoint decisions" not in result.output
 
 
@@ -378,5 +387,5 @@ class TestPurge:
 
     def test_shows_plan_status(self, runner, sample_plan):
         write_plan(sample_plan)
-        result = runner.invoke(cli, ["status", sample_plan.project_id])
+        result = runner.invoke(cli, ["status", sample_plan.id])
         assert "pending" in result.output

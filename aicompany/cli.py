@@ -203,7 +203,7 @@ def cmd_status(project_id: str | None):
         return
 
     plan = registry.load_plan(project_id)
-    click.echo(f"\nProject: {plan.title} ({plan.project_id})")
+    click.echo(f"\nProject: {plan.title} ({plan.id})")
     click.echo(f"Status: {plan.status}")
     click.echo(f"Tech: {', '.join(plan.tech_stack)}")
     click.echo()

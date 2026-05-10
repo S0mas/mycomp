@@ -14,6 +14,22 @@ def _make_val_mock():
     return MagicMock(run=AsyncMock(side_effect=_passthrough))
 
 
+def _make_cto_mock(response=None):
+    return MagicMock(run=AsyncMock(return_value=response or MOCK_CTO))
+
+
+def _make_hr_mock(response=None):
+    default_hr = {
+        "team": {"id": "backend_engineer", "name": "BE", "skills": [],
+                 "members": ["be_lead"], "lead_id": "be_lead"},
+        "persons": [{"id": "be_lead", "name": "Lead", "role": "lead",
+                     "identity": "You lead.", "skills": [], "knowledge": [],
+                     "rules": [], "tools": []}],
+        "skills": [],
+    }
+    return MagicMock(run=AsyncMock(return_value=response or default_hr))
+
+
 MOCK_CTO = {
     "title": "Test Project",
     "tech_stack": ["python"],
@@ -35,19 +51,11 @@ class TestPlanAndCreateProject:
         write_persons(sample_persons)
 
     async def _plan(self, cto_response=None, hr_response=None, on_status=None):
-        cto_resp = cto_response or MOCK_CTO
-        hr_resp = hr_response or {
-            "team": {"id": "backend_engineer", "name": "BE", "skills": [],
-                     "members": ["be_lead"], "lead_id": "be_lead"},
-            "persons": [{"id": "be_lead", "name": "Lead", "role": "lead",
-                         "identity": "You lead.", "skills": [], "knowledge": [],
-                         "rules": [], "tools": []}],
-            "skills": [],
-        }
-        with patch("aicompany.planning._run_cto_planning", new=AsyncMock(return_value=cto_resp)), \
-             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)), \
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock(cto_response)), \
+             patch("aicompany.planning.HRTeamCreation", return_value=_make_hr_mock(hr_response)), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             kwargs = {"on_status": on_status} if on_status is not None else {}
             return await plan_and_create_project("Build API", **kwargs)
 
@@ -58,33 +66,34 @@ class TestPlanAndCreateProject:
 
     async def test_creates_missing_teams(self):
         cto_needing_new = {**MOCK_CTO, "teams_required": ["backend_engineer", "new_team"]}
-        mock_hr = AsyncMock(return_value={
+        new_team_hr = {
             "team": {"id": "new_team", "name": "New", "skills": [],
                      "members": ["n_lead"], "lead_id": "n_lead"},
             "persons": [{"id": "n_lead", "name": "Lead", "role": "lead",
                          "identity": "Lead.", "skills": [], "knowledge": [],
                          "rules": [], "tools": []}],
             "skills": [],
-        })
-        with patch("aicompany.planning._run_cto_planning",
-                   new=AsyncMock(return_value=cto_needing_new)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+        }
+        mock_hr_instance = _make_hr_mock(new_team_hr)
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock(cto_needing_new)), \
+             patch("aicompany.planning.HRTeamCreation", return_value=mock_hr_instance), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             result = await plan_and_create_project("Build API")
         assert "new_team" in result.created_teams
-        mock_hr.assert_called()
+        mock_hr_instance.run.assert_called()
 
     async def test_no_hr_for_existing_team(self, sample_team):
         cto_using_existing = {**MOCK_CTO, "teams_required": [sample_team.id]}
-        mock_hr = AsyncMock()
-        with patch("aicompany.planning._run_cto_planning",
-                   new=AsyncMock(return_value=cto_using_existing)), \
-             patch("aicompany.planning._hr_create_team", new=mock_hr), \
+        mock_hr_cls = MagicMock()
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock(cto_using_existing)), \
+             patch("aicompany.planning.HRTeamCreation", mock_hr_cls), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             result = await plan_and_create_project("Build API")
-        mock_hr.assert_not_called()
+        mock_hr_cls.assert_not_called()
         assert result.created_teams == []
 
     async def test_status_callback_called(self):
@@ -98,11 +107,11 @@ class TestPlanAndCreateProject:
                          "rules": [], "tools": []}],
             "skills": [],
         }
-        with patch("aicompany.planning._run_cto_planning",
-                   new=AsyncMock(return_value=cto_needing_new)), \
-             patch("aicompany.planning._hr_create_team", new=AsyncMock(return_value=hr_resp)), \
+        with patch("aicompany.planning.CTOPlanning", return_value=_make_cto_mock(cto_needing_new)), \
+             patch("aicompany.planning.HRTeamCreation", return_value=_make_hr_mock(hr_resp)), \
              patch("aicompany.planning.RequirementsValidation", return_value=_make_val_mock()), \
-             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()):
+             patch("aicompany.planning.PlanValidation", return_value=_make_val_mock()), \
+             patch("aicompany.planning.Deduplication", return_value=MagicMock(run=AsyncMock())):
             await plan_and_create_project("Build API", on_status=statuses.append)
         assert any("new_team" in s for s in statuses)
 

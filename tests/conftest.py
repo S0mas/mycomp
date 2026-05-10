@@ -9,7 +9,9 @@ import yaml
 from pathlib import Path
 
 import aicompany.config as config
-from aicompany.models import CompanyState, Person, Plan, ProjectPlan, Skill, Task, TaskInput, Team
+from aicompany.models import (
+    CompanyState, Person, Plan, ProjectPlan, Skill, TaskInput, TaskStub, Team,
+)
 
 
 # ── Filesystem isolation ───────────────────────────────────────────────────────
@@ -51,14 +53,35 @@ def make_task_input(spec: str = "Do something", context: str = "") -> TaskInput:
     return TaskInput(specification=spec, context=context)
 
 
-def make_leaf_plan(title: str = "", spec: str = "") -> Plan:
+def make_leaf_plan(title: str = "", spec: str = "", plan_id: str = "") -> Plan:
     """Minimal leaf Plan (no subtasks) for use in tests."""
     return Plan(
-        project_id="",
+        id=plan_id,
         title=title or "leaf plan",
         input=TaskInput(specification=spec),
         requirements=[],
         tasks=[],
+    )
+
+
+def make_stub(
+    task_id: str,
+    title: str = "",
+    team: str = "backend_engineer",
+    depends_on: list | None = None,
+    depended_on_by: list | None = None,
+    is_checkpoint: bool = False,
+    status: str = "pending",
+) -> TaskStub:
+    """Minimal TaskStub for use in tests."""
+    return TaskStub(
+        id=task_id,
+        title=title or task_id,
+        assigned_team=team,
+        depends_on=depends_on or [],
+        depended_on_by=depended_on_by or [],
+        is_checkpoint=is_checkpoint,
+        status=status,
     )
 
 
@@ -111,47 +134,35 @@ def sample_state(sample_team) -> CompanyState:
 
 
 @pytest.fixture
-def sample_tasks() -> list:
+def sample_stubs() -> list:
     return [
-        Task(
-            id="task_001",
-            title="Design schema",
-            input=make_task_input("Create the DB schema"),
-            assigned_team="backend_engineer",
-            plan=make_leaf_plan("Design schema", "Create the DB schema"),
-            depends_on=[],
-            is_checkpoint=False,
-        ),
-        Task(
-            id="task_002",
-            title="Implement API",
-            input=make_task_input("Build REST endpoints"),
-            assigned_team="backend_engineer",
-            plan=make_leaf_plan("Implement API", "Build REST endpoints"),
-            depends_on=["task_001"],
-            is_checkpoint=True,
-        ),
-        Task(
-            id="task_003",
-            title="Write tests",
-            input=make_task_input("Unit tests for the API"),
-            assigned_team="backend_engineer",
-            plan=make_leaf_plan("Write tests", "Unit tests for the API"),
-            depends_on=["task_002"],
-            is_checkpoint=False,
-        ),
+        make_stub("task_001", "Design schema",   depends_on=[]),
+        make_stub("task_002", "Implement API",   depends_on=["task_001"], is_checkpoint=True),
+        make_stub("task_003", "Write tests",     depends_on=["task_002"]),
     ]
 
 
+# Keep sample_tasks as alias so existing test code still works
 @pytest.fixture
-def sample_plan(sample_tasks) -> Plan:
+def sample_tasks(sample_stubs) -> list:
+    return sample_stubs
+
+
+@pytest.fixture
+def sample_plan(sample_stubs) -> Plan:
+    # Also compute depended_on_by
+    id_map = {s.id: s for s in sample_stubs}
+    for s in sample_stubs:
+        for dep_id in s.depends_on:
+            if dep_id in id_map:
+                id_map[dep_id].depended_on_by.append(s.id)
     return Plan(
-        project_id="proj_test01",
+        id="proj_test01",
         title="Test Project",
         input=TaskInput(specification="# Test requirements"),
         tech_stack=["python", "fastapi"],
         teams_required=["backend_engineer"],
-        tasks=sample_tasks,
+        tasks=sample_stubs,
     )
 
 
@@ -191,10 +202,35 @@ def write_skills(skills: list) -> None:
 
 
 def write_plan(plan: Plan) -> None:
-    """Write a Plan to the (patched) PROJECTS_DIR."""
-    proj_dir = config.PROJECTS_DIR / plan.project_id
-    (proj_dir / "decisions").mkdir(parents=True, exist_ok=True)
-    (proj_dir / "outputs").mkdir(parents=True, exist_ok=True)
+    """Write a Plan and minimal leaf task plans to the (patched) PROJECTS_DIR."""
+    proj_dir = config.PROJECTS_DIR / plan.id
+    for subdir in ("decisions", "outputs", "sessions", "logs", "req_tests", "test_suites", "tasks"):
+        (proj_dir / subdir).mkdir(parents=True, exist_ok=True)
     (proj_dir / "requirements.md").write_text("# Test requirements", encoding="utf-8")
     with (proj_dir / "plan.yaml").open("w") as f:
         yaml.dump(plan.to_dict(), f, default_flow_style=False)
+    # Write a minimal leaf plan for each stub so the orchestrator can load them
+    for stub in plan.tasks:
+        _write_leaf_task_plan(proj_dir, stub.id)
+
+
+def _write_leaf_task_plan(parent_dir: Path, task_id: str) -> None:
+    """Write a minimal leaf plan.yaml for a task under parent_dir/tasks/{task_id}/."""
+    task_node = parent_dir / "tasks" / task_id
+    task_node.mkdir(parents=True, exist_ok=True)
+    leaf = make_leaf_plan(title=f"{task_id} plan", spec=f"Implement {task_id}", plan_id=task_id)
+    with (task_node / "plan.yaml").open("w") as f:
+        yaml.dump(leaf.to_dict(), f, default_flow_style=False)
+
+
+def write_task_plan(project_id: str, task_id: str, plan: Plan,
+                    parent_dir: Path | None = None) -> None:
+    """Write a task's plan to the task tree under the project directory."""
+    base = parent_dir or (config.PROJECTS_DIR / project_id)
+    task_node = base / "tasks" / task_id
+    task_node.mkdir(parents=True, exist_ok=True)
+    with (task_node / "plan.yaml").open("w") as f:
+        yaml.dump(plan.to_dict(), f, default_flow_style=False)
+    # Recursively write leaf plans for any subtask stubs
+    for stub in plan.tasks:
+        _write_leaf_task_plan(task_node, stub.id)

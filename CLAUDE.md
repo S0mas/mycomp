@@ -57,10 +57,13 @@ aicompany/          core package
   config.py         paths, MODEL env var, MIN_REQUIREMENTS_LENGTH, task_log ContextVar
   models/           data models — split by domain (all re-exported from models/__init__.py):
     org.py          Skill, Person, Team, CompanyState, build_prompt
-    project.py      TaskInput(specification, context), Task, Plan (alias: ProjectPlan), MAX_PLAN_DEPTH
+    project.py      TaskInput(specification, context), TaskStub, Plan (alias: ProjectPlan), MAX_PLAN_DEPTH
                     TaskInput.specification is validated; context is parent background (never validated).
-                    Task.plan: Plan is ALWAYS present (never None); Plan.has_subtasks=False → leaf,
-                    True → composite; to_dict/from_dict depth-bounded at MAX_PLAN_DEPTH=20
+                    TaskStub: lightweight child entry (id, title, assigned_team, depends_on, depended_on_by,
+                    is_checkpoint, status). Plan.tasks: list[TaskStub] — stubs only; full task plans are
+                    stored in tasks/{id}/plan.yaml on disk. Plan.has_subtasks=False → leaf, True → composite;
+                    to_dict/from_dict depth-bounded at MAX_PLAN_DEPTH=20. Plan.id: project_id at root,
+                    task_id at all other depths.
     requirements.py SubRequirement, Requirement, RequirementTest, RequirementTestSuite, RequirementsEvaluation
     session.py      Message, SessionRules, Session
   person_agent.py   PersonAgent: wraps ClaudeSDKClient (claude-code-sdk). One persistent Claude Code process per
@@ -81,25 +84,33 @@ aicompany/          core package
                     validates requirements text against requirements_policy.md
     plan_validation.py          PlanValidation — 3 validators (architecture, traceability, feasibility);
                     validates CTO plan dict against plan_policy.md
-  planning.py       async CTO planning + HR team creation + project assembly: PlanResult(project_id, plan, created_teams)
-                    plan_and_create_project: RequirementsValidation → CTO → PlanValidation → _expand_tasks_recursively → assemble → save
-                    _expand_tasks_recursively: tasks with non-empty "subtasks" key recurse (req-val → CTO → plan-val → expand); leaf = no subtasks
+  planning.py       async CTO planning + HR team creation + project assembly + deduplication:
+                    PlanResult(project_id, plan, created_teams)
+                    Classes: CTOPlanning, HRTeamCreation, Deduplication — each has a .run() method
+                    plan_and_create_project: RequirementsValidation → CTOPlanning → PlanValidation →
+                    _build_task_tree (recursive, saves tasks/{id}/plan.yaml) → save root plan → Deduplication
+                    _build_task_tree: non-leaf tasks (non-empty "subtasks" key) recurse with req-val+CTO+plan-val;
+                    leaf tasks get their own plan.yaml. Computes depended_on_by (reverse of depends_on).
   seeds.py          Default data for company/: skills, CTO team+persons, policy text.
                     Used by tests (via _seed_defaults_to_disk) and as fallback reference.
                     CTO schema includes optional "subtasks" key for recursive planning signal.
   registry.py       all YAML file I/O. _load_yaml/_save_yaml helpers. save_* auto-registers in state.yaml.
                     Also: save/load requirements, RequirementTestSuites, RequirementTests.
+                    save_task_plan / load_task_plan: nested task plan I/O (BFS search via _find_task_node).
+                    Task plans stored at tasks/{id}/plan.yaml inside the project directory tree.
   orchestrator.py   async execution loop + topological sort. _handle_checkpoint, _execute_task (async),
-                    run_project (async, called via asyncio.run() from CLI), _execute_subtask_plan, _find_prior_output
+                    run_project (async, called via asyncio.run() from CLI), _execute_subtask_plan.
+                    Operates on TaskStub lists (no Task objects). Loads each task's plan via load_task_plan.
+                    Teams discover dependency outputs via workspace — no automatic output injection.
   oversight.py      human checkpoint UI: _display_task, _prompt_decision, checkpoint()
   cli.py            Click commands — thin UI layer, delegates to planning.py, orchestrator.py
                     cmd_new_project: inline 50-char length check, then plan_and_create_project (validation embedded).
                     cmd_init: builds state.yaml by scanning committed company/ files (skills, persons, teams).
                               Does NOT write any files — defaults are already in the repo.
-tests/              pytest suite — 242 tests, all mocked (no API key needed).
+tests/              pytest suite — 248 tests, all mocked (no API key needed).
                     Async tests use pytest-asyncio (asyncio_mode=auto in pytest.ini).
                     Pattern/orchestrator tests mock PersonAgent via FakePersonAgent.
-                    planning/cli tests patch _run_cto_planning, _hr_create_team, RequirementsValidation, PlanValidation.
+                    planning/cli tests patch CTOPlanning, HRTeamCreation, Deduplication, RequirementsValidation, PlanValidation.
 docs/               VISION.md, ARCHITECTURE.md, SELF_IMPROVEMENT.md, BACKENDS.md
                     README.md — navigation index for all docs
                     01-overview.md through 10-config.md — structured technical docs with PlantUML diagrams
@@ -111,8 +122,12 @@ company/            runtime state — gitignored, created by init
   teams/            one YAML per team (members, lead_id, communication pattern)
 projects/           runtime project data — gitignored
   <project_id>/
-    plan.yaml           project plan + task statuses + embedded requirements
+    plan.yaml           root plan: metadata + TaskStub list
     requirements.md     original requirements text
+    tasks/              recursive task plan tree
+      <task_id>/
+        plan.yaml       task's own plan: input, scoped requirements, sub-task stubs
+        tasks/          nested sub-tasks (same structure, recursive)
     src/                live source files written by agents (Claude Code cwd for all PersonAgents)
     outputs/            one .md per task — final agent output
     sessions/           one .json per task — full message log

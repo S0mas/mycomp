@@ -7,7 +7,7 @@ import yaml
 from . import config
 from .models import (
     CompanyState, Person, Plan, Requirement, RequirementTest,
-    Skill, TaskInput, Team, RequirementTestSuite,
+    Skill, TaskInput, TaskStub, Team, RequirementTestSuite,
 )
 
 
@@ -137,7 +137,7 @@ def project_dir(project_id: str) -> Path:
 
 def create_project_dir(project_id: str, requirements_text: str) -> Path:
     d = project_dir(project_id)
-    for subdir in ("decisions", "outputs", "sessions", "logs", "req_tests", "test_suites"):
+    for subdir in ("decisions", "outputs", "sessions", "logs", "req_tests", "test_suites", "tasks"):
         (d / subdir).mkdir(parents=True, exist_ok=True)
     (d / "requirements.md").write_text(requirements_text, encoding="utf-8")
     return d
@@ -158,6 +158,9 @@ def load_plan(project_id: str) -> Plan:
     if not path.exists():
         raise FileNotFoundError(f"Plan not found for project: {project_id}")
     plan = _load_yaml(path, Plan)
+    # Ensure id is set (legacy plans used project_id key; from_dict handles both)
+    if not plan.id:
+        plan.id = project_id
     # Backward compat: old plan.yaml has no "input" key — inject from requirements.md
     if not plan.input.specification:
         req_path = project_dir(project_id) / "requirements.md"
@@ -173,7 +176,48 @@ def load_plan(project_id: str) -> Plan:
 
 
 def save_plan(plan: Plan) -> None:
-    _save_yaml(project_dir(plan.project_id) / "plan.yaml", plan)
+    _save_yaml(project_dir(plan.id) / "plan.yaml", plan)
+
+
+# ── Task plan tree ─────────────────────────────────────────────────────────────
+
+def _find_task_node(root: Path, task_id: str) -> Path | None:
+    """BFS through nested tasks/ directories to find tasks/{task_id}/plan.yaml."""
+    queue = [root / "tasks"]
+    while queue:
+        tasks_dir = queue.pop(0)
+        if not tasks_dir.exists():
+            continue
+        candidate = tasks_dir / task_id
+        if candidate.is_dir() and (candidate / "plan.yaml").exists():
+            return candidate
+        for child in tasks_dir.iterdir():
+            if child.is_dir():
+                queue.append(child / "tasks")
+    return None
+
+
+def save_task_plan(project_id: str, task_id: str, plan: Plan,
+                   parent_dir: Path | None = None) -> None:
+    """Save a task's plan.yaml under parent_dir/tasks/{task_id}/.
+
+    If parent_dir is None, saves directly under the project root tasks/ directory.
+    Creates the directory tree as needed.
+    """
+    base = parent_dir if parent_dir is not None else project_dir(project_id)
+    task_node = base / "tasks" / task_id
+    task_node.mkdir(parents=True, exist_ok=True)
+    _save_yaml(task_node / "plan.yaml", plan)
+
+
+def load_task_plan(project_id: str, task_id: str) -> Plan:
+    """Load a task's plan.yaml, searching the full nested task tree by BFS."""
+    node = _find_task_node(project_dir(project_id), task_id)
+    if node is None:
+        raise FileNotFoundError(
+            f"Task plan not found for task '{task_id}' in project '{project_id}'"
+        )
+    return _load_yaml(node / "plan.yaml", Plan)
 
 
 def save_output(project_id: str, task_id: str, content: str) -> str:

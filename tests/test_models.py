@@ -8,16 +8,17 @@ What we verify:
   - Default values are sane (status='pending', tools=[], etc.)
   - build_prompt() composes structured context correctly
   - TaskInput.validate() enforces specification rules
-  - Plan/Task recursive serialization is depth-bounded
-  - Backward compat: old plan.yaml 'description' key is accepted by Task.from_dict()
+  - TaskStub round-trips and defaults
+  - Plan.tasks is list[TaskStub]; Plan serialization does not embed nested plans
+  - Backward compat: old plan.yaml 'project_id' key is accepted by Plan.from_dict()
 """
 import pytest
 from aicompany.models import (
     CompanyState, Person, Plan, ProjectPlan, Requirement, RequirementTest,
-    RequirementsEvaluation, Skill, SubRequirement, Task, TaskInput, Team,
+    RequirementsEvaluation, Skill, SubRequirement, TaskInput, TaskStub, Team,
     RequirementTestSuite, MAX_PLAN_DEPTH, build_prompt,
 )
-from tests.conftest import make_leaf_plan, make_task_input
+from tests.conftest import make_leaf_plan, make_task_input, make_stub
 
 
 # ── TaskInput ─────────────────────────────────────────────────────────────────
@@ -54,10 +55,9 @@ class TestTaskInput:
         assert any("binary" in e.lower() for e in errors)
 
     def test_validate_does_not_check_context(self):
-        # context is informational — never validated regardless of content
         ti = TaskInput(
             specification="Build a full authentication system with OAuth2 and JWT tokens.",
-            context="",   # empty context is fine
+            context="",
         )
         assert ti.validate() == []
 
@@ -68,6 +68,44 @@ class TestTaskInput:
     def test_from_dict_prefers_specification_over_text(self):
         ti = TaskInput.from_dict({"specification": "New", "text": "Old"})
         assert ti.specification == "New"
+
+
+# ── TaskStub ──────────────────────────────────────────────────────────────────
+
+class TestTaskStub:
+    def test_round_trip(self):
+        stub = TaskStub(
+            id="task_001", title="Design schema",
+            assigned_team="backend_team",
+            depends_on=["task_000"],
+            depended_on_by=["task_002"],
+            is_checkpoint=True,
+            status="pending",
+            output_file="outputs/task_001.md",
+        )
+        restored = TaskStub.from_dict(stub.to_dict())
+        assert restored.id == stub.id
+        assert restored.title == stub.title
+        assert restored.assigned_team == stub.assigned_team
+        assert restored.depends_on == stub.depends_on
+        assert restored.depended_on_by == stub.depended_on_by
+        assert restored.is_checkpoint == stub.is_checkpoint
+        assert restored.status == stub.status
+        assert restored.output_file == stub.output_file
+
+    def test_defaults(self):
+        stub = TaskStub(id="t", title="T", assigned_team="eng")
+        assert stub.depends_on == []
+        assert stub.depended_on_by == []
+        assert stub.is_checkpoint is False
+        assert stub.status == "pending"
+        assert stub.output_file == ""
+
+    def test_from_dict_missing_optional_fields(self):
+        stub = TaskStub.from_dict({"id": "t", "title": "T", "assigned_team": "eng"})
+        assert stub.depends_on == []
+        assert stub.depended_on_by == []
+        assert stub.status == "pending"
 
 
 # ── Skill ─────────────────────────────────────────────────────────────────────
@@ -152,7 +190,7 @@ class TestBuildPrompt:
         assert "Rules you follow:" in prompt
 
     def test_full_prompt_composition(self, sample_persons, sample_skills):
-        person = sample_persons[0]  # be_lead with skills, knowledge, rules
+        person = sample_persons[0]
         skill_registry = {s.id: s for s in sample_skills}
         prompt = build_prompt(person, skill_registry)
         assert "You are a backend lead." in prompt
@@ -225,119 +263,67 @@ class TestCompanyState:
         assert CompanyState().all_skills() == set()
 
 
-# ── Task ──────────────────────────────────────────────────────────────────────
-
-class TestTask:
-    def test_round_trip(self, sample_tasks):
-        for task in sample_tasks:
-            restored = Task.from_dict(task.to_dict())
-            assert restored.id == task.id
-            assert restored.title == task.title
-            assert restored.input.specification == task.input.specification
-            assert restored.input.context == task.input.context
-            assert restored.depends_on == task.depends_on
-            assert restored.is_checkpoint == task.is_checkpoint
-            assert restored.plan.has_subtasks == task.plan.has_subtasks
-
-    def test_defaults(self):
-        t = Task(
-            id="t", title="T",
-            input=make_task_input("Do something meaningful for the project."),
-            assigned_team="eng",
-            plan=make_leaf_plan("T"),
-        )
-        assert t.status == "pending"
-        assert t.depends_on == []
-        assert t.is_checkpoint is False
-        assert t.output_file == ""
-
-    def test_plan_always_present(self):
-        t = Task(
-            id="t", title="T",
-            input=make_task_input("Something"),
-            assigned_team="eng",
-            plan=make_leaf_plan(),
-        )
-        assert t.plan is not None
-        assert not t.plan.has_subtasks
-
-    def test_backward_compat_description_key(self):
-        # Legacy plan.yaml uses 'description' string instead of 'input' dict
-        t = Task.from_dict({
-            "id": "t1", "title": "T", "description": "old style description",
-            "assigned_team": "eng"
-        })
-        assert t.input.specification == "old style description"
-        assert t.input.context == ""
-        assert not t.plan.has_subtasks   # stubs a leaf plan
-
-    def test_from_dict_new_format(self):
-        t = Task.from_dict({
-            "id": "t1", "title": "T",
-            "input": {"specification": "new style", "context": "some context"},
-            "assigned_team": "eng",
-            "plan": {"project_id": "", "title": "t plan",
-                     "input": {"specification": "new style", "context": ""},
-                     "requirements": [], "tasks": []},
-        })
-        assert t.input.specification == "new style"
-        assert t.input.context == "some context"
-        assert not t.plan.has_subtasks
-
-
-# ── Plan ─────────────────────────────────────────────────────────────────────
+# ── Plan ──────────────────────────────────────────────────────────────────────
 
 class TestPlan:
     def test_round_trip(self, sample_plan):
         restored = Plan.from_dict(sample_plan.to_dict())
-        assert restored.project_id == sample_plan.project_id
+        assert restored.id == sample_plan.id
         assert restored.title == sample_plan.title
         assert restored.input.specification == sample_plan.input.specification
         assert len(restored.tasks) == len(sample_plan.tasks)
         assert restored.tasks[0].id == sample_plan.tasks[0].id
 
+    def test_tasks_are_stubs(self, sample_plan):
+        assert all(isinstance(t, TaskStub) for t in sample_plan.tasks)
+
     def test_task_by_id_found(self, sample_plan):
-        t = sample_plan.task_by_id("task_002")
-        assert t is not None
-        assert t.title == "Implement API"
+        stub = sample_plan.task_by_id("task_002")
+        assert stub is not None
+        assert stub.title == "Implement API"
 
     def test_task_by_id_not_found(self, sample_plan):
         assert sample_plan.task_by_id("task_999") is None
 
     def test_defaults(self):
-        p = Plan(project_id="p", title="T", input=TaskInput(specification="spec"))
+        p = Plan(id="p", title="T", input=TaskInput(specification="spec"))
         assert p.status == "pending"
         assert p.tasks == []
         assert p.tech_stack == []
         assert p.decisions_log == []
 
     def test_has_subtasks_false_for_leaf(self):
-        p = Plan(project_id="p", title="T", input=TaskInput(specification="s"), tasks=[])
+        p = Plan(id="p", title="T", input=TaskInput(specification="s"), tasks=[])
         assert p.has_subtasks is False
 
-    def test_has_subtasks_true_when_tasks_present(self, sample_plan):
+    def test_has_subtasks_true_when_stubs_present(self, sample_plan):
         assert sample_plan.has_subtasks is True
 
     def test_projectplan_alias(self):
-        # ProjectPlan must remain a usable alias for Plan
-        p = ProjectPlan(project_id="p", title="T", input=TaskInput(specification="s"))
+        p = ProjectPlan(id="p", title="T", input=TaskInput(specification="s"))
         assert isinstance(p, Plan)
 
-    def test_depth_limit_raises_on_serialization(self):
-        # Build a plan nested just beyond MAX_PLAN_DEPTH
-        inner = Plan(project_id="", title="leaf", input=TaskInput(specification="s"),
-                     tasks=[])
-        for _ in range(MAX_PLAN_DEPTH + 1):
-            task = Task(
-                id="t", title="T",
-                input=make_task_input("s"),
-                assigned_team="eng",
-                plan=inner,
-            )
-            inner = Plan(project_id="", title="wrap", input=TaskInput(specification="s"),
-                         tasks=[task])
+    def test_legacy_project_id_key_accepted(self):
+        d = {
+            "project_id": "proj_legacy",
+            "title": "T",
+            "input": {"specification": "s"},
+            "tasks": [],
+        }
+        plan = Plan.from_dict(d)
+        assert plan.id == "proj_legacy"
+
+    def test_serialization_does_not_embed_nested_plans(self, sample_plan):
+        d = sample_plan.to_dict()
+        for task_dict in d["tasks"]:
+            assert "plan" not in task_dict
+            assert "input" not in task_dict
+
+    def test_depth_limit_on_nested_from_dict(self):
+        # Extremely deeply nested from_dict should raise ValueError
+        d = {"id": "p", "title": "T", "input": {"specification": "s"}, "tasks": []}
         with pytest.raises(ValueError, match="maximum depth"):
-            inner.to_dict()
+            Plan.from_dict(d, _depth=MAX_PLAN_DEPTH + 1)
 
 
 # ── RequirementsEvaluation ────────────────────────────────────────────────────
@@ -472,7 +458,7 @@ class TestPlanRequirements:
             ],
         }
         plan = Plan(
-            project_id="p1", title="T",
+            id="p1", title="T",
             input=TaskInput(specification="Auth requirements"),
             requirements=[Requirement.from_dict(req_data)],
         )
@@ -489,7 +475,7 @@ class TestPlanRequirements:
             ],
         }
         plan = Plan(
-            project_id="p1", title="T",
+            id="p1", title="T",
             input=TaskInput(specification="spec"),
             requirements=[Requirement.from_dict(req_data)],
         )
@@ -498,24 +484,19 @@ class TestPlanRequirements:
         assert sub.title == "Login"
         assert plan.sub_requirement_by_id("REQ-9999") is None
 
-    def test_task_requirements_live_in_plan(self):
+    def test_requirements_scoped_to_node(self):
         req_data = {
             "id": "REQ-0001", "title": "Auth", "description": ".",
             "sub_requirements": [
                 {"id": "REQ-0001-001", "title": "Login", "description": ".", "acceptance_criteria": []},
             ],
         }
-        task_plan = Plan(
-            project_id="", title="task plan",
+        plan = Plan(
+            id="task_001", title="task plan",
             input=TaskInput(specification="implement auth"),
             requirements=[Requirement.from_dict(req_data)],
             tasks=[],
         )
-        task = Task(
-            id="task_001", title="Auth task",
-            input=make_task_input("implement auth"),
-            assigned_team="backend_team",
-            plan=task_plan,
-        )
-        assert len(task.plan.requirements) == 1
-        assert task.plan.requirements[0].id == "REQ-0001"
+        assert len(plan.requirements) == 1
+        assert plan.requirements[0].id == "REQ-0001"
+        assert not plan.has_subtasks
