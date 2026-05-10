@@ -107,28 +107,17 @@ creation makes corrupt HR responses more dangerous (see Issue 7).
 
 ---
 
-## Issue 2 — `state_yaml` is stale during recursive planning
+## Issue 2 — `state_yaml` is stale during recursive planning ✅ FIXED
 
 **Location**: `aicompany/planning.py` — `plan_and_create_project()` → `_build_task_tree()`
 
-**Description**: `state_yaml` is serialized once at the top of `plan_and_create_project`,
-before `_create_missing_teams` runs. The string is passed unchanged into every recursive
-`CTOPlanning().run(approved_spec, state_yaml, ...)` call inside `_build_task_tree`. Any
-teams that HR creates for the top-level plan are invisible to sub-level CTO sessions because
-the registry snapshot they receive is frozen at the moment before team creation.
+**Description**: `state_yaml` was serialized once at the top of `plan_and_create_project` and
+passed as a frozen string into every recursive `CTOPlanning().run()` call. Teams HR created for
+the top-level plan were invisible to sub-level CTO sessions.
 
-**Impact**: Sub-level CTO plans cannot reuse teams that were just created for the top-level
-plan. They may re-request identical teams under different IDs, producing duplicate coverage
-and redundant HR calls. The `_create_missing_teams` call in `_build_task_tree` (Issue 1 fix)
-mitigates the execution-time crash, but the CTO's team selection is still based on stale data.
-
-**Design notes for the fix**:
-- Pass `state_yaml` as a mutable reference or refresh it inside `_build_task_tree` after
-  each call to `_create_missing_teams`.
-- Simplest approach: after each `_create_missing_teams` call inside `_build_task_tree`,
-  reload state and re-serialize: `state_yaml = yaml.dump(registry.load_state().to_dict(), ...)`.
-  Pass updated `state_yaml` into the recursive call.
-- Alternatively, pass `state_yaml` as a list/container so mutations propagate up.
+**Fix**: Removed `state_yaml` as a parameter entirely. `CTOPlanning.run()` now calls
+`registry.load_state()` at the start of each invocation, so every CTO call — top-level or
+recursive — sees the current registry state including teams just created by HR.
 
 ---
 
@@ -155,46 +144,33 @@ cleaned up after reading (or on error via `missing_ok=True`).
 
 ---
 
-## Issue 4 — Checkpoints absent in sub-task execution
+## Issue 4 — Checkpoints absent in sub-task execution ✅ FIXED
 
 **Location**: `aicompany/orchestrator.py` — `_execute_subtask_plan()`
 
 **Description**: `run_project` gates every root-level task marked `is_checkpoint=True` behind
-a human A/R/M prompt. `_execute_subtask_plan` — the code path for composite tasks — has no
-equivalent guard. Sub-tasks that carry `is_checkpoint=True` (e.g. a deployment step inside a
-composite "Release" task) execute silently without human approval.
+a human A/R/M prompt. `_execute_subtask_plan` had no equivalent guard, so sub-tasks with
+`is_checkpoint=True` executed silently without human approval.
 
-**Impact**: The CTO schema and plan policy both document checkpoints as covering "deployment,
-payment, security config, or irreversible production actions." Recursive CTO planning can
-legitimately mark sub-steps as checkpoints, and those marks are silently ignored.
-
-**Design notes for the fix**:
-- Extract the checkpoint-gating logic from `run_project` into a shared helper, e.g.
-  `_gate_checkpoint(stub, project_id, plan) -> str | None` returning the action.
-- Call it from both `run_project` (root stubs) and `_execute_subtask_plan` (sub-stubs).
-- `_execute_subtask_plan` currently has no access to the root `plan` object for
-  `decisions_log` — either pass it through or handle decisions at the task level only.
+**Fix**: Added checkpoint gating inside `_execute_subtask_plan` using the existing
+`_handle_checkpoint`. The task's own `Plan` object (already loaded) serves as the
+`decisions_log` target. After the checkpoint decision, the task plan is saved to disk
+(covering Issue 5 as well). Rejected sub-stubs are marked failed and downstream deps skip.
 
 ---
 
-## Issue 5 — Sub-task plan status never persisted to disk
+## Issue 5 — Sub-task plan status never persisted to disk ✅ FIXED
 
 **Location**: `aicompany/orchestrator.py` — `_execute_subtask_plan()`
 
-**Description**: `_execute_subtask_plan` loads the task-level `plan.yaml`, updates sub-stub
-`.status` fields in memory, but never writes the task-level `plan.yaml` back to disk. On
-crash and resume, sub-stubs all appear as `"pending"`.
+**Description**: `_execute_subtask_plan` updated sub-stub `.status` in memory but never wrote
+the task-level `plan.yaml` back to disk. On crash and resume, all sub-stubs showed as `"pending"`.
 
-**Impact**: Session-based LLM resumption still works (sessions are saved per-message), so
-the AI work doesn't repeat in full. But the orchestrator re-runs `_execute_task` for every
-sub-stub, relying entirely on session state — a fragile recovery that fails if any session
-file is corrupted or missing.
-
-**Design notes for the fix**:
-- After each sub-stub completes in `_execute_subtask_plan`, reload the task-level plan,
-  update the stub's status, and call `registry.save_task_plan` to persist it.
-- Requires `_execute_subtask_plan` to know the `project_id` and the task's `parent_dir` to
-  find the right `plan.yaml` — both are available or easily threaded through.
+**Fix**: Added `registry.update_task_plan(project_id, task_plan.id, task_plan)` after every
+status change inside `_execute_subtask_plan` — on success, on dependency failure, and on
+checkpoint rejection. `registry.update_task_plan` is a new helper that does a BFS search to
+find the existing plan file and overwrites it in place, without needing to know the parent
+directory path.
 
 ---
 

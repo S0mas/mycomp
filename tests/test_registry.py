@@ -196,6 +196,22 @@ class TestSaveLoadTaskPlan:
         with pytest.raises(FileNotFoundError):
             registry.load_task_plan(sample_plan.id, "task_999")
 
+    def test_update_task_plan_overwrites_in_place(self, sample_plan):
+        write_plan(sample_plan)
+        task_plan = make_leaf_plan("original", "original spec", plan_id="task_001")
+        registry.save_task_plan(sample_plan.id, "task_001", task_plan)
+        updated = make_leaf_plan("updated", "updated spec", plan_id="task_001")
+        registry.update_task_plan(sample_plan.id, "task_001", updated)
+        loaded = registry.load_task_plan(sample_plan.id, "task_001")
+        assert loaded.title == "updated"
+        assert loaded.input.specification == "updated spec"
+
+    def test_update_task_plan_raises_if_not_found(self, sample_plan):
+        write_plan(sample_plan)
+        with pytest.raises(FileNotFoundError):
+            registry.update_task_plan(sample_plan.id, "task_999",
+                                      make_leaf_plan(plan_id="task_999"))
+
 
 class TestOutputs:
     def test_save_and_load_output(self, sample_plan):

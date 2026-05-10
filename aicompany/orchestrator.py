@@ -98,11 +98,22 @@ async def _execute_subtask_plan(
     for sub_stub in sorted_subs:
         if any(dep not in sub_done for dep in sub_stub.depends_on):
             sub_stub.status = "failed"
+            registry.update_task_plan(project_id, task_plan.id, task_plan)
             continue
+
+        if sub_stub.is_checkpoint:
+            action = _handle_checkpoint(sub_stub, None, project_id, task_plan)
+            if action == "rejected":
+                sub_stub.status = "failed"
+            registry.update_task_plan(project_id, task_plan.id, task_plan)
+            if action == "rejected":
+                continue
+
         sub_output = await _execute_task(sub_stub, project_id, sub_done, workspace)
         registry.save_output(project_id, sub_stub.id, sub_output)
         sub_stub.status = "done"
         sub_done.add(sub_stub.id)
+        registry.update_task_plan(project_id, task_plan.id, task_plan)
         outputs.append(sub_output)
     return "\n\n---\n\n".join(outputs)
 

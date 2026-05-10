@@ -191,6 +191,16 @@ def load_task_plan(project_id: str, task_id: str) -> Plan:
     return _load_yaml(node / "plan.yaml", Plan)
 
 
+def update_task_plan(project_id: str, task_id: str, plan: Plan) -> None:
+    """Overwrite an existing task plan in place, found by BFS through the task tree."""
+    node = _find_task_node(project_dir(project_id), task_id)
+    if node is None:
+        raise FileNotFoundError(
+            f"Task plan not found for task '{task_id}' in project '{project_id}'"
+        )
+    _save_yaml(node / "plan.yaml", plan)
+
+
 def save_output(project_id: str, task_id: str, content: str) -> str:
     path = project_dir(project_id) / "outputs" / f"{task_id}.md"
     path.parent.mkdir(parents=True, exist_ok=True)

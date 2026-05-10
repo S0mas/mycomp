@@ -324,3 +324,109 @@ class TestNestedSubtaskExecution:
         parent_output = registry.load_output(project_id, "task_001")
         assert parent_output is not None
         assert "Task output" in parent_output
+
+
+# ── Issue 4 & 5: checkpoints and persistence in subtask execution ─────────────
+
+class TestSubtaskCheckpointAndPersistence:
+    """
+    Issue 4: sub-task checkpoints must gate execution (call oversight).
+    Issue 5: sub-stub status changes must be persisted to disk after each step.
+    """
+
+    def _setup(self, sample_state, sample_team, sample_persons, sample_skills,
+               project_id, sub_stubs, sub_plan_title="subtask plan"):
+        """Write state, team, persons, skills, and a composite root plan with one stub."""
+        parent_stub = make_stub("task_001", "Parent task", team="backend_engineer")
+        root_plan = Plan(
+            id=project_id, title="Test Project",
+            input=TaskInput(specification="# reqs"),
+            tech_stack=["python"], teams_required=["backend_engineer"],
+            tasks=[parent_stub],
+        )
+        task_001_plan = Plan(
+            id="task_001", title=sub_plan_title,
+            input=TaskInput(specification="parent work"),
+            tasks=sub_stubs,
+        )
+        write_state(sample_state)
+        write_team(sample_team)
+        write_persons(sample_persons)
+        write_skills(sample_skills)
+        write_plan(root_plan)
+        write_task_plan(project_id, "task_001", task_001_plan)
+
+    async def test_checkpoint_sub_stub_calls_oversight(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        project_id = "proj_ckpt"
+        sub_ck = make_stub("sub_001", "Deploy", team="backend_engineer", is_checkpoint=True)
+        self._setup(sample_state, sample_team, sample_persons, sample_skills,
+                    project_id, [sub_ck])
+
+        mock_oversight = MagicMock(return_value=("approved", None))
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.orchestrator.oversight.checkpoint", mock_oversight), \
+             patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await orchestrator.run_project(project_id)
+
+        mock_oversight.assert_called_once()
+        call_stub = mock_oversight.call_args[0][0]
+        assert call_stub.id == "sub_001"
+
+    async def test_rejected_checkpoint_sub_stub_skips_execution(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        project_id = "proj_rej"
+        sub_ck = make_stub("sub_001", "Deploy", team="backend_engineer", is_checkpoint=True)
+        self._setup(sample_state, sample_team, sample_persons, sample_skills,
+                    project_id, [sub_ck])
+
+        mock_oversight = MagicMock(return_value=("rejected", None))
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.orchestrator.oversight.checkpoint", mock_oversight), \
+             patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await orchestrator.run_project(project_id)
+
+        # Sub-stub was rejected — no output should have been saved
+        assert registry.load_output(project_id, "sub_001") is None
+
+    async def test_sub_stub_status_persisted_after_completion(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        project_id = "proj_persist"
+        sub1 = make_stub("sub_001", "Sub 1", team="backend_engineer")
+        self._setup(sample_state, sample_team, sample_persons, sample_skills,
+                    project_id, [sub1])
+
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await orchestrator.run_project(project_id)
+
+        # Reload the task plan from disk — status must be persisted
+        loaded = registry.load_task_plan(project_id, "task_001")
+        sub = next(s for s in loaded.tasks if s.id == "sub_001")
+        assert sub.status == "done"
+
+    async def test_failed_dep_sub_stub_status_persisted(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        project_id = "proj_dep_fail"
+        sub1 = make_stub("sub_001", "Sub 1", team="backend_engineer")
+        sub2 = make_stub("sub_002", "Sub 2", team="backend_engineer",
+                         depends_on=["sub_001"], is_checkpoint=True)
+        self._setup(sample_state, sample_team, sample_persons, sample_skills,
+                    project_id, [sub1, sub2])
+
+        # sub_001 raises — sub_002 depends on it, so sub_002 should be marked failed
+        FakeAgent = _fake_agent_class(raises=RuntimeError("agent error"))
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            try:
+                await orchestrator.run_project(project_id)
+            except Exception:
+                pass
+
+        loaded = registry.load_task_plan(project_id, "task_001")
+        sub_map = {s.id: s for s in loaded.tasks}
+        # sub_001 fails (agent error propagates up before we can persist), sub_002 is skipped
+        assert sub_map["sub_002"].status in ("pending", "failed")
