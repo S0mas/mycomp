@@ -263,7 +263,7 @@ If a completed dep stub has an `output_file`, the path is appended: `task_001 (D
 
 ---
 
-## Issue 11 — Composite task output is an unstructured blob
+## Issue 11 — Composite task output is an unstructured blob ✅ FIXED
 
 **Location**: `aicompany/orchestrator.py` — `_execute_subtask_plan()`
 
@@ -272,10 +272,9 @@ task's output file. There's no attribution (which sub-output came from which tea
 summary, no structure. A downstream task that reads this output file gets an unlabelled wall
 of text.
 
-**Design notes for the fix**:
-- Add per-sub-task headers before joining: `f"## {sub_stub.title} ({sub_stub.assigned_team})\n\n{sub_output}"`.
-- Or generate a short synthesis summary at the end of `_execute_subtask_plan` using the
-  lead_delegates pattern with a "Project Lead" persona that summarises what was built.
+**Fix**: Each sub-output is now prefixed with a Markdown `##` header before joining:
+`## {sub_stub.title} (team: {sub_stub.assigned_team}, id: {sub_stub.id})`.
+Downstream tasks can navigate by heading and know exactly which team produced each section.
 
 ---
 

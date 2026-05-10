@@ -325,6 +325,47 @@ class TestNestedSubtaskExecution:
         assert parent_output is not None
         assert "Task output" in parent_output
 
+    async def test_nested_output_has_attribution_headers(
+        self, sample_state, sample_team, sample_persons, sample_skills,
+    ):
+        project_id = "proj_headers"
+
+        parent_stub = make_stub("task_001", "Build API", team="backend_engineer")
+        root_plan = Plan(
+            id=project_id, title="Header Test",
+            input=TaskInput(specification="# requirements"),
+            tech_stack=["python"],
+            teams_required=["backend_engineer"],
+            tasks=[parent_stub],
+        )
+
+        sub1 = make_stub("sub_001", "Design Schema", team="backend_engineer")
+        sub2 = make_stub("sub_002", "Implement Endpoints", team="backend_engineer",
+                         depends_on=["sub_001"])
+        task_001_plan = Plan(
+            id="task_001", title="Build API — plan",
+            input=TaskInput(specification="build it"),
+            tasks=[sub1, sub2],
+        )
+
+        write_state(sample_state)
+        write_team(sample_team)
+        write_persons(sample_persons)
+        write_skills(sample_skills)
+        write_plan(root_plan)
+        write_task_plan(project_id, "task_001", task_001_plan)
+
+        FakeAgent = _fake_agent_class()
+        with patch("aicompany.patterns.PersonAgent", FakeAgent):
+            await orchestrator.run_project(project_id)
+
+        parent_output = registry.load_output(project_id, "task_001")
+        assert "## Design Schema" in parent_output
+        assert "sub_001" in parent_output
+        assert "## Implement Endpoints" in parent_output
+        assert "sub_002" in parent_output
+        assert "---" in parent_output  # separator between sections
+
 
 # ── Issue 4 & 5: checkpoints and persistence in subtask execution ─────────────
 

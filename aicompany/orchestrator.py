@@ -131,7 +131,8 @@ async def _execute_subtask_plan(
         sub_stub.status = "done"
         sub_done.add(sub_stub.id)
         registry.update_task_plan(project_id, task_plan.id, task_plan)
-        outputs.append(sub_output)
+        header = f"## {sub_stub.title} (team: {sub_stub.assigned_team}, id: {sub_stub.id})"
+        outputs.append(f"{header}\n\n{sub_output}")
     return "\n\n---\n\n".join(outputs)
 
 
