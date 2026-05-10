@@ -1,4 +1,3 @@
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -6,8 +5,8 @@ import yaml
 
 from . import config
 from .models import (
-    CompanyState, Person, Plan, Requirement, RequirementTest,
-    Skill, TaskInput, TaskStub, Team, RequirementTestSuite,
+    CompanyState, Person, Plan, Requirement,
+    Skill, TaskInput, TaskStub, Team,
 )
 
 
@@ -116,19 +115,6 @@ def save_team(team: Team) -> None:
         save_state(state)
 
 
-def find_missing_skills(required: list, state: CompanyState) -> list:
-    available = state.all_skills()
-    return [s for s in required if s.lower() not in available]
-
-
-def find_team_for_skill(skill: str, state: CompanyState) -> str | None:
-    skill = skill.lower()
-    for team_entry in state.teams:
-        if skill in {s.lower() for s in team_entry.get("skills", [])}:
-            return team_entry["id"]
-    return None
-
-
 # ── Projects ───────────────────────────────────────────────────────────────────
 
 def project_dir(project_id: str) -> Path:
@@ -137,7 +123,7 @@ def project_dir(project_id: str) -> Path:
 
 def create_project_dir(project_id: str, requirements_text: str) -> Path:
     d = project_dir(project_id)
-    for subdir in ("decisions", "outputs", "sessions", "logs", "req_tests", "test_suites", "tasks"):
+    for subdir in ("decisions", "outputs", "sessions", "logs", "req_tests", "tasks"):
         (d / subdir).mkdir(parents=True, exist_ok=True)
     (d / "requirements.md").write_text(requirements_text, encoding="utf-8")
     return d
@@ -157,22 +143,7 @@ def load_plan(project_id: str) -> Plan:
     path = project_dir(project_id) / "plan.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Plan not found for project: {project_id}")
-    plan = _load_yaml(path, Plan)
-    # Ensure id is set (legacy plans used project_id key; from_dict handles both)
-    if not plan.id:
-        plan.id = project_id
-    # Backward compat: old plan.yaml has no "input" key — inject from requirements.md
-    if not plan.input.specification:
-        req_path = project_dir(project_id) / "requirements.md"
-        if req_path.exists():
-            warnings.warn(
-                f"Plan '{project_id}' is missing the 'input' field — injecting from "
-                "requirements.md (old format). Re-save the plan to migrate.",
-                UserWarning,
-                stacklevel=2,
-            )
-            plan.input = TaskInput(specification=req_path.read_text(encoding="utf-8"))
-    return plan
+    return _load_yaml(path, Plan)
 
 
 def save_plan(plan: Plan) -> None:
@@ -232,24 +203,6 @@ def load_output(project_id: str, task_id: str) -> str | None:
     return path.read_text(encoding="utf-8") if path.exists() else None
 
 
-def materialize_files(text: str, workspace: Path) -> list[str]:
-    """Parse <write_file path="..."> blocks from agent output and write to workspace."""
-    import re
-    pattern = re.compile(
-        r'<write_file\s+path=["\']([^"\']+)["\']>(.*?)</write_file>',
-        re.DOTALL,
-    )
-    written = []
-    for rel_path, content in pattern.findall(text):
-        dest = (workspace / rel_path).resolve()
-        if not str(dest).startswith(str(workspace.resolve())):
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content.strip("\n"), encoding="utf-8")
-        written.append(rel_path)
-    return written
-
-
 def save_session(project_id: str, session) -> str:
     """Persist a Session's full message log as JSON. Returns relative path."""
     import json
@@ -301,33 +254,6 @@ def save_requirements(project_id: str, requirements: list[Requirement]) -> None:
     with path.open("w", encoding="utf-8") as f:
         yaml.dump([r.to_dict() for r in requirements], f,
                   default_flow_style=False, allow_unicode=True)
-
-
-def load_requirements(project_id: str) -> list[Requirement]:
-    path = project_dir(project_id) / "req_tests" / "_requirements.yaml"
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8") as f:
-        return [Requirement.from_dict(r) for r in (yaml.safe_load(f) or [])]
-
-
-def save_test_suite(project_id: str, suite: RequirementTestSuite) -> None:
-    path = project_dir(project_id) / "test_suites" / f"{suite.id}.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _save_yaml(path, suite)
-
-
-def load_test_suite(project_id: str, suite_id: str) -> RequirementTestSuite:
-    path = project_dir(project_id) / "test_suites" / f"{suite_id}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"RequirementTestSuite not found: {suite_id}")
-    return _load_yaml(path, RequirementTestSuite)
-
-
-def save_requirement_test(project_id: str, req_test: RequirementTest) -> None:
-    path = project_dir(project_id) / "req_tests" / f"{req_test.id}.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _save_yaml(path, req_test)
 
 
 def list_projects() -> list:

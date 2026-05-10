@@ -16,7 +16,6 @@ from .patterns import (
     PATTERNS,
     run_lead_delegates,
     run_pair_review,
-    run_develop_test_review,
 )
 
 if TYPE_CHECKING:
@@ -27,7 +26,6 @@ __all__ = [
     "run_pattern",
     "run_lead_delegates",
     "run_pair_review",
-    "run_develop_test_review",
 ]
 
 

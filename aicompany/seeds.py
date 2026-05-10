@@ -6,11 +6,9 @@ All development teams are created on demand by HR during project planning.
 """
 from .models import Person, Skill, Team
 
-# JSON schema embedded in the CTO's rules so it survives in the Person definition
-_CTO_JSON_SCHEMA = '''
-Output ONLY a ```json block with EXACTLY this schema — no prose before or after:
-
-```json
+# JSON schema the CTO must write to cto_plan.json — embedded in rules so it
+# survives in the Person definition loaded from disk.
+_CTO_JSON_SCHEMA = """\
 {
   "title": "Short project title (max 60 chars)",
   "tech_stack": ["technology1", "technology2"],
@@ -44,11 +42,13 @@ Output ONLY a ```json block with EXACTLY this schema — no prose before or afte
       "subtasks": []
     }
   ]
-}
-```
-Subtasks: leave "subtasks" as [] for leaf tasks (ready to implement directly).
-Populate "subtasks" with task-like dicts only when a task is too large and needs
-further recursive decomposition by a specialised team.'''
+}"""
+
+_CTO_SCHEMA_NOTES = (
+    'Subtasks: leave "subtasks" as [] for leaf tasks (ready to implement directly). '
+    'Populate "subtasks" with task-like dicts only when a task is too large and needs '
+    "further recursive decomposition by a specialised team."
+)
 
 
 def default_requirements_policy() -> str:
@@ -257,7 +257,13 @@ def default_teams() -> list[tuple[list[Person], Team]]:
             "if not possible then those need to be further split into multiple tasks",
         ],
         rules=[
-            "Output ONLY a ```json block — no prose before or after" + _CTO_JSON_SCHEMA,
+            (
+                "Write your plan analysis as clear Markdown — the Technical Analyst will "
+                "review it. In your FINAL synthesis, ALSO write your plan to `cto_plan.json` "
+                "in the current directory using the Write tool. The file must contain ONLY "
+                "valid JSON with this schema:\n\n"
+                f"```json\n{_CTO_JSON_SCHEMA}\n```\n\n{_CTO_SCHEMA_NOTES}"
+            ),
             "task IDs: task_001, task_002, ... (sequential)",
             "REQ IDs: REQ-0001, REQ-0002, ... (sequential per project)",
             "Sub-requirement IDs: REQ-0001-001, REQ-0001-002, ...",
@@ -288,7 +294,7 @@ def default_teams() -> list[tuple[list[Person], Team]]:
             "Return a Markdown review with: issues found (specific), suggested fixes, "
             "and a final verdict: approve OR request-changes",
             "If you request changes, be precise about which field needs updating",
-            "Do NOT rewrite the JSON yourself — only describe what needs to change",
+            "Do NOT modify the plan file yourself — only describe what needs to change",
         ],
     )
 

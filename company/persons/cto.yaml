@@ -15,23 +15,25 @@ knowledge:
 name: CTO
 role: lead
 rules:
-- "Output ONLY a ```json block — no prose before or after\nOutput ONLY a ```json block\
-  \ with EXACTLY this schema — no prose before or after:\n\n```json\n{\n  \"title\"\
-  : \"Short project title (max 60 chars)\",\n  \"tech_stack\": [\"technology1\", \"\
-  technology2\"],\n  \"teams_required\": [\"team_id1\"],\n  \"requirements\": [\n\
-  \    {\n      \"id\": \"REQ-0001\",\n      \"title\": \"Requirement title\",\n \
-  \     \"description\": \"What the user needs.\",\n      \"sub_requirements\": [\n\
-  \        {\n          \"id\": \"REQ-0001-001\",\n          \"title\": \"Sub-requirement\
-  \ title\",\n          \"description\": \"Specific, testable slice of the requirement.\"\
-  ,\n          \"acceptance_criteria\": [\n            \"Given X, when Y, then Z\"\
-  \n          ]\n        }\n      ]\n    }\n  ],\n  \"tasks\": [\n    {\n      \"\
-  id\": \"task_001\",\n      \"title\": \"Task title\",\n      \"description\": \"\
-  Detailed description of what to build and expected output.\",\n      \"assigned_team\"\
-  : \"team_id\",\n      \"depends_on\": [],\n      \"is_checkpoint\": false,\n   \
-  \   \"requirement_ids\": [\"REQ-0001-001\"],\n      \"subtasks\": []\n    }\n  ]\n\
-  }\n```\nSubtasks: leave \"subtasks\" as [] for leaf tasks (ready to implement directly).\n\
-  Populate \"subtasks\" with task-like dicts only when a task is too large and needs\n\
-  further recursive decomposition by a specialised team."
+- "Write your plan analysis as clear Markdown — the Technical Analyst will review\
+  \ it. In your FINAL synthesis, ALSO write your plan to `cto_plan.json` in the current\
+  \ directory using the Write tool. The file must contain ONLY valid JSON with this\
+  \ schema:\n\n```json\n{\n  \"title\": \"Short project title (max 60 chars)\",\n\
+  \  \"tech_stack\": [\"technology1\", \"technology2\"],\n  \"teams_required\": [\"\
+  team_id1\"],\n  \"requirements\": [\n    {\n      \"id\": \"REQ-0001\",\n      \"\
+  title\": \"Requirement title\",\n      \"description\": \"What the user needs.\"\
+  ,\n      \"sub_requirements\": [\n        {\n          \"id\": \"REQ-0001-001\"\
+  ,\n          \"title\": \"Sub-requirement title\",\n          \"description\": \"\
+  Specific, testable slice of the requirement.\",\n          \"acceptance_criteria\"\
+  : [\n            \"Given X, when Y, then Z\"\n          ]\n        }\n      ]\n\
+  \    }\n  ],\n  \"tasks\": [\n    {\n      \"id\": \"task_001\",\n      \"title\"\
+  : \"Task title\",\n      \"description\": \"Detailed description of what to build\
+  \ and expected output.\",\n      \"assigned_team\": \"team_id\",\n      \"depends_on\"\
+  : [],\n      \"is_checkpoint\": false,\n      \"requirement_ids\": [\"REQ-0001-001\"\
+  ],\n      \"subtasks\": []\n    }\n  ]\n}\n```\n\nSubtasks: leave \"subtasks\"\
+  \ as [] for leaf tasks (ready to implement directly). Populate \"subtasks\" with\
+  \ task-like dicts only when a task is too large and needs further recursive decomposition\
+  \ by a specialised team."
 - 'task IDs: task_001, task_002, ... (sequential)'
 - 'REQ IDs: REQ-0001, REQ-0002, ... (sequential per project)'
 - 'Sub-requirement IDs: REQ-0001-001, REQ-0001-002, ...'

@@ -5,8 +5,7 @@ from pathlib import Path
 
 from aicompany.models import Message, Session, SessionRules, Person
 from aicompany.communication import (
-    create_session, run_lead_delegates, run_pair_review,
-    run_develop_test_review, run_pattern,
+    create_session, run_lead_delegates, run_pair_review, run_pattern,
 )
 
 
@@ -274,84 +273,6 @@ class TestRunPattern:
             )
         assert output == "Mock output"
         assert session.status == "complete"
-
-
-class TestDevelopTestReview:
-    def _make_full_team(self):
-        lead = Person(id="lead", name="Lead", role="lead", identity="Lead.")
-        coder = Person(id="coder", name="Coder", role="coder", identity="Coder.")
-        tester = Person(id="tester", name="Tester", role="tester", identity="Tester.")
-        reviewer = Person(id="reviewer", name="Reviewer", role="reviewer", identity="Reviewer.")
-        return lead, coder, tester, reviewer
-
-    async def test_full_team_produces_output(self, tmp_path):
-        lead, coder, tester, reviewer = self._make_full_team()
-        members = [lead, coder, tester, reviewer]
-        session = create_session("t1", [m.id for m in members],
-                                 SessionRules(pattern="develop_test_review", max_rounds=6))
-        FakeAgent = _fake_agent_class()
-
-        with patch("aicompany.patterns.PersonAgent", FakeAgent):
-            output = await run_develop_test_review(
-                session, lead, members,
-                "Implement login", "POST /login endpoint", "ctx", tmp_path,
-            )
-        assert output == "Mock output"
-        assert session.status == "complete"
-
-    async def test_all_roles_called(self, tmp_path):
-        lead, coder, tester, reviewer = self._make_full_team()
-        members = [lead, coder, tester, reviewer]
-        session = create_session("t1", [m.id for m in members],
-                                 SessionRules(pattern="develop_test_review", max_rounds=6))
-        FakeAgent = _fake_agent_class()
-
-        with patch("aicompany.patterns.PersonAgent", FakeAgent):
-            await run_develop_test_review(
-                session, lead, members, "Task", "desc", "ctx", tmp_path,
-            )
-        # lead (brief + final), coder (impl + revise), tester, reviewer = at least 6
-        assert FakeAgent._think_count >= 4
-
-    async def test_falls_back_to_pair_review_without_tester(self, tmp_path):
-        lead, coder, _, reviewer = self._make_full_team()
-        members = [lead, coder, reviewer]
-        session = create_session("t1", [m.id for m in members],
-                                 SessionRules(pattern="develop_test_review", max_rounds=5))
-        FakeAgent = _fake_agent_class()
-
-        with patch("aicompany.patterns.PersonAgent", FakeAgent):
-            output = await run_develop_test_review(
-                session, lead, members, "Task", "desc", "ctx", tmp_path,
-            )
-        assert output == "Mock output"
-        assert session.status == "complete"
-
-    async def test_falls_back_to_lead_delegates_without_coder(self, tmp_path):
-        lead, _, tester, _ = self._make_full_team()
-        members = [lead, tester]
-        session = create_session("t1", [m.id for m in members],
-                                 SessionRules(pattern="develop_test_review", max_rounds=4))
-        FakeAgent = _fake_agent_class()
-
-        with patch("aicompany.patterns.PersonAgent", FakeAgent):
-            output = await run_develop_test_review(
-                session, lead, members, "Task", "desc", "ctx", tmp_path,
-            )
-        assert output == "Mock output"
-
-    async def test_registered_in_patterns(self, tmp_path):
-        lead, coder, tester, reviewer = self._make_full_team()
-        members = [lead, coder, tester, reviewer]
-        FakeAgent = _fake_agent_class()
-        with patch("aicompany.patterns.PersonAgent", FakeAgent):
-            result = await run_pattern(
-                "develop_test_review",
-                create_session("t1", [m.id for m in members],
-                               SessionRules(max_rounds=6)),
-                lead, members, "Task", "desc", "ctx", tmp_path,
-            )
-        assert result == "Mock output"
 
 
 class TestPatternResume:

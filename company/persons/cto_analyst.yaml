@@ -13,6 +13,6 @@ rules:
 - 'Return a Markdown review with: issues found (specific), suggested fixes, and a
   final verdict: approve OR request-changes'
 - If you request changes, be precise about which field needs updating
-- Do NOT rewrite the JSON yourself — only describe what needs to change
+- Do NOT modify the plan file yourself — only describe what needs to change
 skills: []
 tools: []

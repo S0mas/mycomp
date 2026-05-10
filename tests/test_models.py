@@ -14,9 +14,9 @@ What we verify:
 """
 import pytest
 from aicompany.models import (
-    CompanyState, Person, Plan, ProjectPlan, Requirement, RequirementTest,
-    RequirementsEvaluation, Skill, SubRequirement, TaskInput, TaskStub, Team,
-    RequirementTestSuite, MAX_PLAN_DEPTH, build_prompt,
+    CompanyState, Person, Plan, ProjectPlan, Requirement,
+    Skill, SubRequirement, TaskInput, TaskStub, Team,
+    MAX_PLAN_DEPTH, build_prompt,
 )
 from tests.conftest import make_leaf_plan, make_task_input, make_stub
 
@@ -326,32 +326,6 @@ class TestPlan:
             Plan.from_dict(d, _depth=MAX_PLAN_DEPTH + 1)
 
 
-# ── RequirementsEvaluation ────────────────────────────────────────────────────
-
-class TestRequirementsEvaluation:
-    def test_overall_score(self):
-        ev = RequirementsEvaluation(clarity=4, completeness=3, feasibility=5,
-                                    risks=[], suggestions=[], summary="ok", verdict="proceed")
-        assert ev.overall_score == 4.0
-
-    def test_has_risks(self):
-        ev = RequirementsEvaluation(clarity=3, completeness=3, feasibility=3,
-                                    risks=["risk1"], suggestions=[], summary="", verdict="needs_work")
-        assert ev.has_risks is True
-
-    def test_no_risks(self):
-        ev = RequirementsEvaluation(clarity=3, completeness=3, feasibility=3,
-                                    risks=[], suggestions=[], summary="", verdict="proceed")
-        assert ev.has_risks is False
-
-    def test_from_dict(self):
-        d = {"clarity": 4, "completeness": 5, "feasibility": 3,
-             "risks": ["r"], "suggestions": ["s"], "summary": "sum", "verdict": "proceed"}
-        ev = RequirementsEvaluation.from_dict(d)
-        assert ev.clarity == 4
-        assert ev.risks == ["r"]
-
-
 # ── Requirements traceability models ──────────────────────────────────────────
 
 class TestSubRequirement:
@@ -401,49 +375,10 @@ class TestRequirement:
         for sub in req.sub_requirements:
             assert sub.parent_id == "REQ-0001"
 
-    def test_all_sub_ids(self):
-        req = Requirement.from_dict(self._make_req())
-        assert req.all_sub_ids() == ["REQ-0001-001", "REQ-0001-002"]
-
     def test_defaults(self):
         req = Requirement.from_dict({"id": "REQ-0001", "title": "T", "description": "D"})
         assert req.sub_requirements == []
         assert req.status == "pending"
-
-
-class TestRequirementTest:
-    def test_round_trip(self):
-        rt = RequirementTest(
-            id="TEST-0001-001", sub_req_id="REQ-0001-001",
-            title="Login test", test_file="tests/requirements/test_REQ_0001_001.py",
-        )
-        restored = RequirementTest.from_dict(rt.to_dict())
-        assert restored.id == rt.id
-        assert restored.test_file == rt.test_file
-
-    def test_defaults(self):
-        rt = RequirementTest.from_dict({
-            "id": "TEST-0001-001", "sub_req_id": "REQ-0001-001", "title": "T", "test_file": "f.py",
-        })
-        assert rt.status == "pending"
-
-
-class TestRequirementTestSuite:
-    def test_round_trip(self):
-        suite = RequirementTestSuite(
-            id="SUITE-0001", requirement_id="REQ-0001",
-            name="Auth Test Suite", test_ids=["TEST-0001-001", "TEST-0001-002"],
-        )
-        restored = RequirementTestSuite.from_dict(suite.to_dict())
-        assert restored.id == suite.id
-        assert restored.test_ids == suite.test_ids
-
-    def test_defaults(self):
-        suite = RequirementTestSuite.from_dict({
-            "id": "SUITE-0001", "requirement_id": "REQ-0001", "name": "S",
-        })
-        assert suite.test_ids == []
-        assert suite.status == "pending"
 
 
 # ── Plan with requirements ────────────────────────────────────────────────────

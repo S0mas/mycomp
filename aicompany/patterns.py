@@ -2,8 +2,8 @@
 Async communication pattern implementations.
 
 Each pattern creates one PersonAgent per team member. Agents that have
-multiple turns (lead in pair_review, coder in develop_test_review) keep
-their process alive between turns so context accumulates naturally.
+multiple turns (lead in pair_review) keep their process alive between
+turns so context accumulates naturally.
 Messages passed to think() carry only the *new* information for that turn.
 """
 from __future__ import annotations
@@ -307,148 +307,7 @@ async def run_pair_review(
     return final
 
 
-async def run_develop_test_review(
-    session: Session,
-    lead: Person,
-    members: list[Person],
-    task_title: str,
-    task_description: str,
-    project_context: str,
-    workspace: Path,
-    skill_registry: dict[str, Skill] | None = None,
-    on_status: callable = None,
-) -> str:
-    """
-    Develop-test-review pattern:
-      1. Lead briefs → 2. Coder implements → 3. Tester writes tests
-      4. Reviewer reviews → 5. Coder revises → 6. Lead synthesizes
-
-    Lead and Coder keep processes alive for their multi-turn work.
-    Falls back to pair_review (no tester) or lead_delegates (no coder/reviewer).
-    """
-    _status = on_status or (lambda msg: None)
-
-    coders = _members_by_role(members, "coder", exclude_id=lead.id)
-    testers = _members_by_role(members, "tester", exclude_id=lead.id)
-    reviewers = _members_by_role(members, "reviewer", exclude_id=lead.id)
-    coder = coders[0] if coders else None
-    tester = testers[0] if testers else None
-    reviewer = reviewers[0] if reviewers else None
-
-    if not tester:
-        return await run_pair_review(
-            session, lead, members, task_title, task_description,
-            project_context, workspace, skill_registry, on_status,
-        )
-    if not coder or not reviewer:
-        return await run_lead_delegates(
-            session, lead, members, task_title, task_description,
-            project_context, workspace, skill_registry, on_status,
-        )
-
-    async with PersonAgent(lead, workspace, skill_registry) as lead_agent:
-        # Step 1: lead brief
-        brief = _step(session, lead.id, "brief")
-        if brief:
-            _status(f"{lead.name} (lead) brief already done — resuming")
-        else:
-            task_msg = _format_task_for_lead(task_title, task_description, project_context, members)
-            session.add_message(Message(
-                sender="orchestrator", recipient=lead.id, kind="task", content=task_msg,
-            ))
-            _status(f"{lead.name} (lead) writing brief...")
-            brief = await lead_agent.think(task_msg)
-            session.add_message(Message(sender=lead.id, recipient="team", kind="brief", content=brief))
-            session.advance_round()
-
-        async with PersonAgent(coder, workspace, skill_registry) as coder_agent:
-            # Step 2: coder implements
-            code = _step(session, coder.id, "result")
-            if code:
-                _status(f"{coder.name} (coder) implementation already done — resuming")
-            else:
-                _status(f"{coder.name} (coder) implementing...")
-                code = await coder_agent.think(f"**Brief from {lead.name}:**\n\n{brief}")
-                session.add_message(Message(
-                    sender=coder.id, recipient=tester.id, kind="result", content=code,
-                ))
-                session.advance_round()
-
-            # Step 3: tester writes tests
-            tests = _step(session, tester.id, "result")
-            if tests:
-                _status(f"{tester.name} (tester) tests already done — resuming")
-            elif not session.is_complete():
-                _status(f"{tester.name} (tester) writing tests...")
-                async with PersonAgent(tester, workspace, skill_registry) as tester_agent:
-                    tests = await tester_agent.think(
-                        f"**Brief:**\n{brief}\n\n**Implementation:**\n{code}\n\n"
-                        f"Write requirement tests."
-                    )
-                session.add_message(Message(
-                    sender=tester.id, recipient=reviewer.id, kind="result", content=tests,
-                ))
-
-            if session.is_complete():
-                return _step(session, lead.id, "result") or brief
-
-            # Step 4: reviewer reviews
-            review = _step(session, reviewer.id, "review")
-            if review:
-                _status(f"{reviewer.name} (reviewer) review already done — resuming")
-            else:
-                session.advance_round()
-                _status(f"{reviewer.name} (reviewer) reviewing...")
-                async with PersonAgent(reviewer, workspace, skill_registry) as reviewer_agent:
-                    review = await reviewer_agent.think(
-                        f"**Brief:**\n{brief}\n\n**Implementation:**\n{code}\n\n"
-                        f"**Tests:**\n{tests}\n\nReview the implementation and tests."
-                    )
-                session.add_message(Message(
-                    sender=reviewer.id, recipient=coder.id, kind="review", content=review,
-                ))
-
-            # Step 5: coder revises
-            revised = _step(session, coder.id, "result", n=2)
-            if revised:
-                _status(f"{coder.name} (coder) revision already done — resuming")
-            elif not session.is_complete():
-                session.advance_round()
-                _status(f"{coder.name} (coder) revising...")
-                revised = await coder_agent.think(
-                    f"**Your implementation:**\n{code}\n\n"
-                    f"**Review feedback:**\n{review}\n\nPlease revise."
-                )
-                session.add_message(Message(
-                    sender=coder.id, recipient=lead.id, kind="result", content=revised,
-                ))
-            else:
-                revised = code
-
-        # Step 6: lead synthesizes
-        final = _step(session, lead.id, "result")
-        if final:
-            _status(f"{lead.name} (lead) final already done — resuming")
-        else:
-            _status(f"{lead.name} (lead) finalizing with traceability summary...")
-            final = await lead_agent.think(
-                f"**Your earlier brief:**\n{brief}\n\n"
-                f"**Final implementation:**\n{revised}\n\n"
-                f"**Tests:**\n{tests}\n\n"
-                f"**Review:**\n{review}\n\nProvide the final synthesis with traceability."
-            )
-            session.add_message(Message(
-                sender=lead.id, recipient="orchestrator", kind="result", content=final,
-            ))
-
-        if not session.is_complete():
-            session.complete()
-
-    return final
-
-
 PATTERNS = {
     "lead_delegates": run_lead_delegates,
     "pair_review": run_pair_review,
-    "develop_test_review": run_develop_test_review,
 }

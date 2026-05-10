@@ -79,13 +79,18 @@ class PlanResult:
 # ── CTO planning ──────────────────────────────────────────────────────────────
 
 class CTOPlanning:
-    async def run(self, requirements_text: str, state_yaml: str, on_status: callable) -> dict:
+    async def run(self, requirements_text: str, on_status: callable) -> dict:
         on_status("CTO team is analysing requirements...")
+        state_yaml = yaml.dump(registry.load_state().to_dict(), default_flow_style=False)
         team, lead, members, skill_registry = registry.load_team_with_members("cto_team")
         rules = SessionRules.from_dict(team.communication) if team.communication else SessionRules()
         session = create_session("cto_planning", [p.id for p in members], rules)
 
-        cto_output = await run_pattern(
+        plan_file = config.BASE_DIR / "cto_plan.json"
+        if plan_file.exists():
+            plan_file.unlink()  # remove any leftover from a prior failed run
+
+        await run_pattern(
             pattern_name=rules.pattern,
             session=session, lead=lead, members=members,
             task_title="Project Planning",
@@ -98,7 +103,16 @@ class CTOPlanning:
             skill_registry=skill_registry,
             on_status=on_status,
         )
-        return _extract_json_block(cto_output)
+
+        if not plan_file.exists():
+            raise ValueError(
+                "CTO did not write cto_plan.json — plan output is missing. "
+                "The CTO must use the Write tool to save the plan as JSON."
+            )
+        try:
+            return json.loads(plan_file.read_text(encoding="utf-8"))
+        finally:
+            plan_file.unlink(missing_ok=True)
 
 
 # ── HR team creation ──────────────────────────────────────────────────────────
@@ -127,6 +141,34 @@ class HRTeamCreation:
         return _extract_json_block(text)
 
 
+_VALID_PERSON_ROLES = {"lead", "coder", "reviewer", "tester"}
+
+
+def _validate_hr_result(result: dict, team_id: str) -> None:
+    """Raise ValueError if HR-produced team data is structurally invalid."""
+    team_data = result.get("team", result)
+    members = team_data.get("members", [])
+    lead_id = team_data.get("lead_id", "")
+
+    if not members:
+        raise ValueError(f"HR created team '{team_id}' with no members")
+    if lead_id not in members:
+        raise ValueError(
+            f"HR created team '{team_id}': lead_id '{lead_id}' not in members {members}"
+        )
+
+    for person_data in result.get("persons", []):
+        pid = person_data.get("id", "<unknown>")
+        role = person_data.get("role", "")
+        if role not in _VALID_PERSON_ROLES:
+            raise ValueError(
+                f"HR created person '{pid}' with invalid role '{role}'. "
+                f"Valid roles: {sorted(_VALID_PERSON_ROLES)}"
+            )
+        if not person_data.get("identity", "").strip():
+            raise ValueError(f"HR created person '{pid}' with empty identity")
+
+
 async def _create_missing_teams(
     teams_required: list[str], tech_stack: list[str], on_status: callable,
 ) -> list[str]:
@@ -138,6 +180,7 @@ async def _create_missing_teams(
     for team_id in missing:
         on_status(f"Team '{team_id}' not found — HR is creating it...")
         result = await HRTeamCreation().run(team_id, tech_context)
+        _validate_hr_result(result, team_id)
         team_data = result.get("team", result)
         team_data["id"] = team_id
         for sd in result.get("skills", []):
@@ -185,7 +228,6 @@ def _scope_requirements(requirements: list, req_ids: set) -> list:
 async def _build_task_tree(
     raw_tasks: list[dict],
     project_id: str,
-    state_yaml: str,
     parent_requirements: list,
     parent_context: str,
     parent_dir: Path,
@@ -222,10 +264,16 @@ async def _build_task_tree(
             req_val = RequirementsValidation()
             approved_spec, _ = await req_val.run(spec, on_status=on_status)
 
-            sub_plan_dict = await CTOPlanning().run(approved_spec, state_yaml, on_status)
+            sub_plan_dict = await CTOPlanning().run(approved_spec, on_status)
 
             plan_val = PlanValidation()
             approved_sub_plan, _ = await plan_val.run(sub_plan_dict, on_status=on_status)
+
+            # Create any teams the sub-plan needs that don't exist yet
+            sub_teams_required = approved_sub_plan.get("teams_required", [])
+            sub_tech_stack = approved_sub_plan.get("tech_stack", [])
+            if sub_teams_required:
+                await _create_missing_teams(sub_teams_required, sub_tech_stack, on_status)
 
             sub_requirements = [
                 Requirement.from_dict(r) for r in approved_sub_plan.get("requirements", [])
@@ -233,7 +281,7 @@ async def _build_task_tree(
             sub_context = f"Parent task: {title}\n{parent_context}"
             sub_stubs = await _build_task_tree(
                 approved_sub_plan.get("tasks", []),
-                project_id, state_yaml, sub_requirements,
+                project_id, sub_requirements,
                 sub_context, task_dir, on_status, depth + 1,
             )
             task_plan = Plan(
@@ -302,7 +350,6 @@ async def _assemble_project(
     raw_tasks: list,
     requirements: list,
     requirements_text: str,
-    state_yaml: str,
     on_status: callable,
 ) -> Plan:
     parent_context = _build_parent_context(title, tech_stack, raw_tasks)
@@ -311,7 +358,6 @@ async def _assemble_project(
     task_stubs = await _build_task_tree(
         raw_tasks=raw_tasks,
         project_id=project_id,
-        state_yaml=state_yaml,
         parent_requirements=requirements,
         parent_context=parent_context,
         parent_dir=project_root,
@@ -526,11 +572,8 @@ async def plan_and_create_project(
     req_val = RequirementsValidation()
     approved_text, _ = await req_val.run(requirements_text, on_status=_status)
 
-    state = registry.load_state()
-    state_yaml = yaml.dump(state.to_dict(), default_flow_style=False)
-
-    # 2. CTO produces plan
-    plan_dict = await CTOPlanning().run(approved_text, state_yaml, _status)
+    # 2. CTO produces plan (reads fresh state from disk internally)
+    plan_dict = await CTOPlanning().run(approved_text, _status)
 
     # 3. Validate the CTO plan
     plan_val = PlanValidation()
@@ -559,7 +602,6 @@ async def plan_and_create_project(
         raw_tasks=raw_tasks,
         requirements=requirements,
         requirements_text=requirements_text,
-        state_yaml=state_yaml,
         on_status=_status,
     )
     registry.save_plan(plan)

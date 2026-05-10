@@ -88,5 +88,281 @@ on legitimate short or error-containing outputs.
 
 ---
 
+---
+
+## Issue 1 — Recursive sub-plan teams never created ✅ FIXED
+
+**Location**: `aicompany/planning.py` — `_build_task_tree()`
+
+**Description**: `_create_missing_teams` was only called once in `plan_and_create_project`
+using the top-level `teams_required`. When `_build_task_tree` ran the recursive CTO for
+a composite task, the sub-plan returned its own `teams_required`, but no code created those
+teams. The orchestrator would crash with `FileNotFoundError` at execution time when it tried
+to `load_team_with_members` for a team that was never built.
+
+**Fix**: Call `_create_missing_teams` inside `_build_task_tree` immediately after the
+`approved_sub_plan` is obtained, using the sub-plan's `teams_required` and `tech_stack`.
+Also added `_validate_hr_result` — structural validation of HR output — since recursive
+creation makes corrupt HR responses more dangerous (see Issue 7).
+
+---
+
+## Issue 2 — `state_yaml` is stale during recursive planning
+
+**Location**: `aicompany/planning.py` — `plan_and_create_project()` → `_build_task_tree()`
+
+**Description**: `state_yaml` is serialized once at the top of `plan_and_create_project`,
+before `_create_missing_teams` runs. The string is passed unchanged into every recursive
+`CTOPlanning().run(approved_spec, state_yaml, ...)` call inside `_build_task_tree`. Any
+teams that HR creates for the top-level plan are invisible to sub-level CTO sessions because
+the registry snapshot they receive is frozen at the moment before team creation.
+
+**Impact**: Sub-level CTO plans cannot reuse teams that were just created for the top-level
+plan. They may re-request identical teams under different IDs, producing duplicate coverage
+and redundant HR calls. The `_create_missing_teams` call in `_build_task_tree` (Issue 1 fix)
+mitigates the execution-time crash, but the CTO's team selection is still based on stale data.
+
+**Design notes for the fix**:
+- Pass `state_yaml` as a mutable reference or refresh it inside `_build_task_tree` after
+  each call to `_create_missing_teams`.
+- Simplest approach: after each `_create_missing_teams` call inside `_build_task_tree`,
+  reload state and re-serialize: `state_yaml = yaml.dump(registry.load_state().to_dict(), ...)`.
+  Pass updated `state_yaml` into the recursive call.
+- Alternatively, pass `state_yaml` as a list/container so mutations propagate up.
+
+---
+
+## Issue 3 — CTO JSON parsing failure has no retry ✅ FIXED
+
+**Location**: `aicompany/planning.py` — `CTOPlanning.run()`
+
+**Description**: The original `CTOPlanning.run()` ended with `return _extract_json_block(cto_output)`,
+forcing the CTO to simultaneously reason and format JSON in the same text output. If the final
+synthesis didn't contain a clean ` ```json ` block, `_extract_json_block` raised `ValueError`
+and crashed the entire `plan_and_create_project` call after expensive requirement validation work.
+
+**Fix**: Separated reasoning from structured output. The CTO now writes human-readable Markdown
+during planning (which the Technical Analyst reviews). In the final synthesis, the CTO writes
+`cto_plan.json` to the workspace using the Write tool. `CTOPlanning.run()` reads that file after
+the pattern completes. If the file is missing, a clear `ValueError` is raised. The file is always
+cleaned up after reading (or on error via `missing_ok=True`).
+
+**Benefits**:
+- No JSON buried in prose — format failures are eliminated by channel separation
+- Analyst reads clean Markdown, not a JSON blob — review quality improves
+- Error message is explicit: "CTO did not write cto_plan.json"
+- Stale leftover files from prior failed runs are cleaned up before each new run
+
+---
+
+## Issue 4 — Checkpoints absent in sub-task execution
+
+**Location**: `aicompany/orchestrator.py` — `_execute_subtask_plan()`
+
+**Description**: `run_project` gates every root-level task marked `is_checkpoint=True` behind
+a human A/R/M prompt. `_execute_subtask_plan` — the code path for composite tasks — has no
+equivalent guard. Sub-tasks that carry `is_checkpoint=True` (e.g. a deployment step inside a
+composite "Release" task) execute silently without human approval.
+
+**Impact**: The CTO schema and plan policy both document checkpoints as covering "deployment,
+payment, security config, or irreversible production actions." Recursive CTO planning can
+legitimately mark sub-steps as checkpoints, and those marks are silently ignored.
+
+**Design notes for the fix**:
+- Extract the checkpoint-gating logic from `run_project` into a shared helper, e.g.
+  `_gate_checkpoint(stub, project_id, plan) -> str | None` returning the action.
+- Call it from both `run_project` (root stubs) and `_execute_subtask_plan` (sub-stubs).
+- `_execute_subtask_plan` currently has no access to the root `plan` object for
+  `decisions_log` — either pass it through or handle decisions at the task level only.
+
+---
+
+## Issue 5 — Sub-task plan status never persisted to disk
+
+**Location**: `aicompany/orchestrator.py` — `_execute_subtask_plan()`
+
+**Description**: `_execute_subtask_plan` loads the task-level `plan.yaml`, updates sub-stub
+`.status` fields in memory, but never writes the task-level `plan.yaml` back to disk. On
+crash and resume, sub-stubs all appear as `"pending"`.
+
+**Impact**: Session-based LLM resumption still works (sessions are saved per-message), so
+the AI work doesn't repeat in full. But the orchestrator re-runs `_execute_task` for every
+sub-stub, relying entirely on session state — a fragile recovery that fails if any session
+file is corrupted or missing.
+
+**Design notes for the fix**:
+- After each sub-stub completes in `_execute_subtask_plan`, reload the task-level plan,
+  update the stub's status, and call `registry.save_task_plan` to persist it.
+- Requires `_execute_subtask_plan` to know the `project_id` and the task's `parent_dir` to
+  find the right `plan.yaml` — both are available or easily threaded through.
+
+---
+
+## Issue 6 — Checkpoint fires with `prior_output=None`
+
+**Location**: `aicompany/orchestrator.py` — `run_project()`
+
+**Description**: `oversight.checkpoint()` accepts a `prior_output: str | None` parameter
+and displays it as a preview when non-None. The call site always passes `None`:
+`_handle_checkpoint(stub, None, project_id, plan)`. The oversight UI infrastructure for
+showing dependency output is complete; the wiring from orchestrator to that UI is missing.
+
+**Impact**: The human approves a checkpoint (e.g. "Deploy to production") without being able
+to see what prior tasks actually produced. Meaningful review is impossible without context.
+
+**Design notes for the fix**:
+- At the checkpoint call site, load the outputs of the stub's `depends_on` tasks:
+  `prior = "\n\n---\n\n".join(filter(None, [registry.load_output(project_id, dep) for dep in stub.depends_on]))`
+- Pass this as `prior_output` to `_handle_checkpoint`.
+- Cap the preview (already done in `_display_task` at 2000 chars).
+
+---
+
+## Issue 7 — HR-created team data is not structurally validated
+
+**Location**: `aicompany/planning.py` — `_create_missing_teams()`
+
+**Description**: `HRTeamCreation.run()` is a single LLM call with no review loop. The
+result is saved directly to disk. No checks are made for: `lead_id` present in `members`,
+non-empty `members`, valid person `role` values, or ID collisions with existing persons.
+
+**Partial fix**: `_validate_hr_result()` was added (Issue 1 fix) to catch the most dangerous
+structural errors (empty members, invalid lead_id, invalid roles, empty identity). This
+prevents runtime crashes but does not add an AI review loop.
+
+**Remaining gap**: Quality issues that structural validation can't catch — incomplete `identity`
+descriptions, missing `knowledge` and `rules` that degrade agent behavior — are not covered.
+
+**Design notes for the full fix**:
+- Convert `HRTeamCreation` to use a `ValidationProcess`-style review: HR proposes a team,
+  a "HR Reviewer" agent checks it against a policy (valid roles, non-empty identities,
+  complete knowledge/rules, no ID conflicts), proposes fixes when rejected.
+- Or simpler: add a second LLM pass that reviews the proposed team definition against a
+  checklist before it's saved to disk.
+
+---
+
+## Issue 8 — Deduplication merge plan not validated before application
+
+**Location**: `aicompany/planning.py` — `_apply_dedup_merges()`
+
+**Description**: After the dedup agents produce a merge plan, `_apply_dedup_merges` trusts
+the output completely. If the AI produces a `keep` ID that doesn't exist in the task tree,
+all `depends_on` entries pointing at removed tasks get rewritten to point at a ghost task.
+If `keep` and `remove` are swapped, the deep task's directory is deleted permanently.
+
+**Impact**: Corrupted plan tree. Orchestrator crashes on `load_task_plan` for any task that
+now depends on a nonexistent node. No rollback.
+
+**Design notes for the fix**:
+- Before applying any merge: call `registry._find_task_node(proj_root, keep_id)` and verify
+  it exists. If not, skip the merge group and log a warning.
+- Verify that all `remove` IDs also exist.
+- Check that no `keep` ID appears as a `remove` in another merge group (prevents cascading
+  invalidation).
+- Consider writing a plan-tree backup before applying merges (copy all `plan.yaml` files
+  to a `.dedup_backup/` directory) so corrupted merges can be rolled back.
+
+---
+
+## Issue 9 — `_scope_requirements` silently produces empty requirement lists
+
+**Location**: `aicompany/planning.py` — `_build_task_tree()` / `_scope_requirements()`
+
+**Description**: When a leaf task has empty `requirement_ids`, or IDs that don't match any
+sub-requirement in the parent list, `_scope_requirements` returns `[]` silently. The task
+executes with zero requirements context. No warning is logged.
+
+**Impact**: Teams receive only a task description, with no acceptance criteria. Output quality
+becomes dependent entirely on description richness. This is also a plan policy violation
+(orphaned tasks), but the violation is not surfaced at build time.
+
+**Design notes for the fix**:
+- Log a warning (not an error) when `scoped_reqs` is empty for a task that has
+  `requirement_ids` — this indicates the IDs are dangling references.
+- Add a cross-check after `_build_task_tree` completes: for each requirement ID that exists
+  in `parent_requirements`, verify at least one stub's `task_plan.requirements` covers it.
+
+---
+
+## Issue 10 — Leaf task context is too thin for teams with dependencies
+
+**Location**: `aicompany/orchestrator.py` — `_build_project_context()`
+
+**Description**: The context built for each team includes task title, raw dependency IDs (not
+titles), workspace path, and scoped requirements. The project title and tech stack are absent.
+Dependency IDs tell teams nothing about what those tasks produced or where to find their
+outputs.
+
+**Impact**: Teams with dependencies must explore the workspace blindly. Every agent spends
+early turns on discovery that structured context could provide in advance.
+
+**Design notes for the fix**:
+- Include project title and tech stack (load from root plan or task plan).
+- Load stub titles for each dependency ID and include them: "Depends on: task_001 (Design
+  schema), task_002 (Implement auth middleware)" instead of "Depends on: task_001, task_002".
+- Optionally include the workspace relative paths of dependency outputs when they exist.
+
+---
+
+## Issue 11 — Composite task output is an unstructured blob
+
+**Location**: `aicompany/orchestrator.py` — `_execute_subtask_plan()`
+
+**Description**: Sub-task outputs are joined with `"\n\n---\n\n"` and saved as the composite
+task's output file. There's no attribution (which sub-output came from which team), no
+summary, no structure. A downstream task that reads this output file gets an unlabelled wall
+of text.
+
+**Design notes for the fix**:
+- Add per-sub-task headers before joining: `f"## {sub_stub.title} ({sub_stub.assigned_team})\n\n{sub_output}"`.
+- Or generate a short synthesis summary at the end of `_execute_subtask_plan` using the
+  lead_delegates pattern with a "Project Lead" persona that summarises what was built.
+
+---
+
+## Issue 12 — Cross-level `depended_on_by` is inconsistent
+
+**Location**: `aicompany/planning.py` — `_build_task_tree()`, `_apply_dedup_merges()`
+
+**Description**: `depended_on_by` is computed locally within each `_build_task_tree` call,
+only across siblings at the same tree level. After deduplication, `_apply_dedup_merges`
+recomputes `depended_on_by` per `plan.yaml` file — again, only within each file's own task
+list. Cross-plan-file reverse edges are never tracked.
+
+**Impact**: The "Required by" field shown to teams in task context (`_build_project_context`)
+may be incomplete. Deduplication decisions that create cross-level dependencies leave
+`depended_on_by` permanently stale.
+
+**Design notes for the fix**:
+- After full tree assembly, run a single BFS traversal that builds a global `{task_id: [task_id]}`
+  reverse map, then writes `depended_on_by` into each `plan.yaml` stub in one pass.
+- This global pass should also run after deduplication.
+
+---
+
+## Issue 13 — Dedup agents run unrestricted in the project directory
+
+**Location**: `aicompany/planning.py` — `Deduplication.run()`
+
+**Description**: Dedup `PersonAgent` instances use `permission_mode="bypassPermissions"` and
+`workspace=proj_root`. They can freely write files anywhere under `proj_root`, including
+`plan.yaml` files. A malfunctioning dedup agent could write directly to plan files, bypassing
+the controlled `_apply_dedup_merges` function.
+
+**Impact**: Direct writes to plan files by agents would produce undetectable corruption — the
+YAML may be syntactically valid but semantically broken (wrong IDs, missing fields, duplicate
+tasks).
+
+**Design notes for the fix**:
+- Have dedup agents write their merge plan to a dedicated file (e.g. `dedup_plan.json`) in
+  the project root, then `_apply_dedup_merges` reads that file rather than trusting the
+  pattern output string. This doesn't prevent direct writes but makes the intended channel
+  explicit and auditable.
+- Long-term: a read-only permission mode in the SDK would be the correct fix, but that
+  requires upstream changes.
+
+---
+
 *These issues are tracked here so they are not forgotten. When addressing them, read the
 design notes above and update this file (or remove the entry) when the fix lands.*

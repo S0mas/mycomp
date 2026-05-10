@@ -115,33 +115,6 @@ class TestLoadSaveSkill:
         assert state.skill_ids().count("python") == 1
 
 
-class TestFindSkills:
-    def test_find_missing_skills_all_present(self, sample_state):
-        missing = registry.find_missing_skills(["python", "fastapi"], sample_state)
-        assert missing == []
-
-    def test_find_missing_skills_some_missing(self, sample_state):
-        missing = registry.find_missing_skills(["python", "kubernetes"], sample_state)
-        assert "kubernetes" in missing
-        assert "python" not in missing
-
-    def test_find_missing_skills_case_insensitive(self, sample_state):
-        missing = registry.find_missing_skills(["Python", "FastAPI"], sample_state)
-        assert missing == []
-
-    def test_find_team_for_skill_found(self, sample_state):
-        team_id = registry.find_team_for_skill("python", sample_state)
-        assert team_id == "backend_engineer"
-
-    def test_find_team_for_skill_not_found(self, sample_state):
-        team_id = registry.find_team_for_skill("cobol", sample_state)
-        assert team_id is None
-
-    def test_find_team_for_skill_case_insensitive(self, sample_state):
-        team_id = registry.find_team_for_skill("Python", sample_state)
-        assert team_id == "backend_engineer"
-
-
 # ── projects ───────────────────────────────────────────────────────────────────
 
 class TestProjectDir:
@@ -181,27 +154,6 @@ class TestLoadSavePlan:
         registry.save_plan(sample_plan)
         loaded = registry.load_plan(sample_plan.id)
         assert loaded.status == "running"
-
-    def test_load_plan_warns_on_missing_input(self, sample_plan):
-        import yaml, warnings
-        proj_dir = config.PROJECTS_DIR / sample_plan.id
-        proj_dir.mkdir(parents=True, exist_ok=True)
-        (proj_dir / "outputs").mkdir(exist_ok=True)
-        (proj_dir / "decisions").mkdir(exist_ok=True)
-        (proj_dir / "tasks").mkdir(exist_ok=True)
-        (proj_dir / "requirements.md").write_text("# Old requirements", encoding="utf-8")
-        raw = sample_plan.to_dict()
-        raw.pop("input", None)
-        with (proj_dir / "plan.yaml").open("w") as f:
-            yaml.dump(raw, f)
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            loaded = registry.load_plan(sample_plan.id)
-
-        assert any("missing the 'input' field" in str(w.message) for w in caught)
-        assert "Old requirements" in loaded.input.specification
-
 
 class TestSaveLoadTaskPlan:
     def test_save_creates_task_directory(self, sample_plan):
@@ -323,106 +275,9 @@ class TestSessionPersistence:
         assert (config.PROJECTS_DIR / "proj_x" / "sessions" / "t1.json").exists()
 
 
-class TestMaterializeFiles:
-    def test_writes_file_from_tag(self, tmp_path):
-        text = '<write_file path="app/main.py">\nprint("hello")\n</write_file>'
-        written = registry.materialize_files(text, tmp_path)
-        assert written == ["app/main.py"]
-        assert (tmp_path / "app/main.py").read_text() == 'print("hello")'
-
-    def test_creates_parent_dirs(self, tmp_path):
-        text = '<write_file path="a/b/c.py">\nx = 1\n</write_file>'
-        registry.materialize_files(text, tmp_path)
-        assert (tmp_path / "a/b/c.py").exists()
-
-    def test_blocks_path_traversal(self, tmp_path):
-        text = '<write_file path="../evil.py">\nbad\n</write_file>'
-        written = registry.materialize_files(text, tmp_path)
-        assert written == []
-        assert not (tmp_path.parent / "evil.py").exists()
-
-    def test_returns_empty_for_no_tags(self, tmp_path):
-        assert registry.materialize_files("no tags here", tmp_path) == []
-
-    def test_multiple_files(self, tmp_path):
-        text = (
-            '<write_file path="a.py">\nx\n</write_file>\n'
-            '<write_file path="b.py">\ny\n</write_file>'
-        )
-        written = registry.materialize_files(text, tmp_path)
-        assert set(written) == {"a.py", "b.py"}
-        assert (tmp_path / "a.py").exists()
-        assert (tmp_path / "b.py").exists()
-
-
-class TestRequirements:
-    def test_save_and_load_requirements(self, sample_state, sample_plan):
-        from aicompany.models import Requirement, SubRequirement
-        write_state(sample_state)
-        registry.create_project_dir(sample_plan.id, "req text")
-
-        sub = SubRequirement(id="REQ-0001-001", parent_id="REQ-0001",
-                             title="Login", description="Can log in.",
-                             acceptance_criteria=["POST /login returns 200"])
-        req = Requirement(id="REQ-0001", title="Auth", description="Auth needed.",
-                          sub_requirements=[sub])
-
-        registry.save_requirements(sample_plan.id, [req])
-        loaded = registry.load_requirements(sample_plan.id)
-
-        assert len(loaded) == 1
-        assert loaded[0].id == "REQ-0001"
-        assert loaded[0].sub_requirements[0].id == "REQ-0001-001"
-        assert loaded[0].sub_requirements[0].acceptance_criteria == ["POST /login returns 200"]
-
-    def test_load_requirements_returns_empty_if_missing(self, sample_state, sample_plan):
-        write_state(sample_state)
-        registry.create_project_dir(sample_plan.id, "req text")
-        result = registry.load_requirements(sample_plan.id)
-        assert result == []
-
-
-class TestRequirementTestSuites:
-    def test_save_and_load_test_suite(self, sample_state, sample_plan):
-        from aicompany.models import RequirementTestSuite
-        write_state(sample_state)
-        registry.create_project_dir(sample_plan.id, "req text")
-
-        suite = RequirementTestSuite(id="SUITE-0001", requirement_id="REQ-0001",
-                          name="Auth Suite", test_ids=["TEST-0001-001"])
-        registry.save_test_suite(sample_plan.id, suite)
-        loaded = registry.load_test_suite(sample_plan.id, "SUITE-0001")
-
-        assert loaded.id == "SUITE-0001"
-        assert loaded.requirement_id == "REQ-0001"
-        assert loaded.test_ids == ["TEST-0001-001"]
-
-    def test_load_missing_suite_raises(self, sample_state, sample_plan):
-        write_state(sample_state)
-        registry.create_project_dir(sample_plan.id, "req text")
-        with pytest.raises(FileNotFoundError):
-            registry.load_test_suite(sample_plan.id, "SUITE-9999")
-
-
-class TestRequirementTest:
-    def test_save_requirement_test(self, sample_state, sample_plan):
-        from aicompany.models import RequirementTest
-        write_state(sample_state)
-        registry.create_project_dir(sample_plan.id, "req text")
-
-        rt = RequirementTest(id="TEST-0001-001", sub_req_id="REQ-0001-001",
-                             title="Login test",
-                             test_file="tests/requirements/test_REQ_0001_001.py")
-        registry.save_requirement_test(sample_plan.id, rt)
-
-        path = config.PROJECTS_DIR / sample_plan.id / "req_tests" / "TEST-0001-001.yaml"
-        assert path.exists()
-
-
-class TestProjectDirHasReqFolders:
-    def test_req_test_and_suite_dirs_created(self, sample_state, sample_plan):
+class TestProjectDirStructure:
+    def test_req_test_and_task_dirs_created(self, sample_state, sample_plan):
         write_state(sample_state)
         d = registry.create_project_dir(sample_plan.id, "req text")
         assert (d / "req_tests").exists()
-        assert (d / "test_suites").exists()
         assert (d / "tasks").exists()
