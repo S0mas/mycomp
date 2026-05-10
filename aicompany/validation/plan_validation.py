@@ -38,6 +38,9 @@ _JSON_RULES = [
     '"proposed_fix" (the FULL revised plan as a JSON object if rejecting, null if approving).',
     "Set verdict=approved only when the plan is traceable, feasible, and structurally complete.",
     "When rejecting, proposed_fix must be the complete revised plan dict — not a diff.",
+    "If '## Structural Issues' appears in the task description, you MUST reject and your "
+    "proposed_fix MUST correct every listed structural issue — you cannot approve a plan "
+    "that has structural errors.",
 ]
 
 
@@ -108,10 +111,23 @@ class PlanValidation(ValidationProcess):
         policy_text = self.policy.load()
         plan_json = json.dumps(artifact, indent=2)
         prefix = f"[Attempt {attempt}] " if attempt > 1 else ""
+
+        structural_section = ""
+        try:
+            _check_requirement_refs(artifact)
+        except ValueError as exc:
+            structural_section = (
+                f"\n\n## Structural Issues (mandatory — must be corrected in proposed_fix)\n\n"
+                f"{exc}\n\n"
+                f"Every task's `requirement_ids` must reference an ID that exists in the "
+                f"`requirements` list. Correct the offending IDs in your proposed_fix."
+            )
+
         return (
             f"{prefix}Validate the following CTO plan against the plan policy.\n\n"
             f"## Plan Policy\n\n{policy_text}\n\n"
             f"## Plan Under Review\n\n```json\n{plan_json}\n```"
+            f"{structural_section}"
         )
 
     async def run(
@@ -119,8 +135,10 @@ class PlanValidation(ValidationProcess):
         artifact: Any,
         on_status: Callable[[str], None] | None = None,
     ) -> tuple[Any, Any]:
-        _check_requirement_refs(artifact)
-        return await super().run(artifact, on_status)
+        result_artifact, result = await super().run(artifact, on_status)
+        # Final guard: if AI approved a plan that still has invalid refs, fail hard.
+        _check_requirement_refs(result_artifact)
+        return result_artifact, result
 
     def _extract_fix(self, result: ValidationResult, raw_output: str) -> dict | None:
         fix = result.proposed_fix

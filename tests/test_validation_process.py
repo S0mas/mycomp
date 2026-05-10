@@ -310,6 +310,28 @@ class TestPlanValidation:
         desc = val._build_task_description({}, 2)
         assert "[Attempt 2]" in desc
 
+    def test_build_description_includes_structural_issues_when_refs_invalid(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(config, "COMPANY_DIR", tmp_path)
+        val = PlanValidation()
+        plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-GHOST"]}],
+        }
+        desc = val._build_task_description(plan, 1)
+        assert "Structural Issues" in desc
+        assert "REQ-GHOST" in desc
+        assert "proposed_fix" in desc.lower() or "must be corrected" in desc
+
+    def test_build_description_no_structural_section_when_refs_valid(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(config, "COMPANY_DIR", tmp_path)
+        val = PlanValidation()
+        plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-001"]}],
+        }
+        desc = val._build_task_description(plan, 1)
+        assert "Structural Issues" not in desc
+
     def test_extract_fix_returns_dict(self):
         val = PlanValidation()
         plan = {"title": "Fixed", "tasks": []}
@@ -423,33 +445,59 @@ class TestCheckRequirementRefs:
 
 
 class TestPlanValidationRequirementRefs:
-    """run() raises ValueError for invalid refs before the AI panel runs."""
+    """Invalid refs surface as AI feedback; approved plans with broken refs are hard-rejected."""
 
-    async def test_run_raises_before_ai_when_refs_invalid(self, monkeypatch):
+    _approved = '```json\n{"verdict": "approved", "summary": "ok", "issues": [], "suggestions": [], "proposed_fix": null}\n```'
+
+    async def test_ai_runs_even_when_refs_invalid(self, monkeypatch, tmp_path):
+        """AI panel should run so it can produce a fix; invalid refs appear in description."""
         bad_plan = {
             "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
             "tasks": [{"id": "t1", "requirement_ids": ["REQ-GHOST"]}],
         }
-        called = []
+        fixed_plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-001"]}],
+        }
+        reject_output = (
+            '```json\n{"verdict": "rejected", "summary": "bad ref", "issues": ["REQ-GHOST unknown"], '
+            '"suggestions": [], "proposed_fix": '
+            + json.dumps(fixed_plan)
+            + '}\n```'
+        )
+        approve_output = self._approved
+        responses = iter([reject_output, approve_output])
 
         async def fake_run_pattern(*args, **kwargs):
-            called.append(True)
-            return ""
+            return next(responses)
 
         monkeypatch.setattr("aicompany.validation.process.run_pattern", fake_run_pattern)
+        monkeypatch.setattr(config, "COMPANY_DIR", tmp_path)
+        result_plan, _ = await PlanValidation().run(bad_plan)
+        assert result_plan == fixed_plan
+
+    async def test_run_raises_if_ai_approves_plan_with_invalid_refs(self, monkeypatch, tmp_path):
+        """If AI incorrectly approves a plan that still has invalid refs, run() hard-fails."""
+        bad_plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-GHOST"]}],
+        }
+        monkeypatch.setattr(
+            "aicompany.validation.process.run_pattern",
+            AsyncMock(return_value=self._approved),
+        )
+        monkeypatch.setattr(config, "COMPANY_DIR", tmp_path)
         with pytest.raises(ValueError, match="REQ-GHOST"):
             await PlanValidation().run(bad_plan)
-        assert not called, "AI pattern should not be called when refs are structurally invalid"
 
     async def test_run_succeeds_with_valid_refs(self, monkeypatch, tmp_path):
         good_plan = {
             "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
             "tasks": [{"id": "t1", "requirement_ids": ["REQ-001"]}],
         }
-        verdict_output = '```json\n{"verdict": "approved", "summary": "ok", "issues": [], "suggestions": [], "proposed_fix": null}\n```'
         monkeypatch.setattr(
             "aicompany.validation.process.run_pattern",
-            AsyncMock(return_value=verdict_output),
+            AsyncMock(return_value=self._approved),
         )
         monkeypatch.setattr(config, "COMPANY_DIR", tmp_path)
         result_plan, _ = await PlanValidation().run(good_plan)
