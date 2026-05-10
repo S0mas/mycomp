@@ -1,13 +1,34 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from .. import config
 from ..models import Person
 from .policy import ValidationPolicy
 from .process import ValidationProcess
 from .result import ValidationResult
+
+
+def _check_requirement_refs(plan_dict: dict) -> None:
+    """Raise ValueError if any task references a requirement ID not in the plan."""
+    valid_ids: set[str] = set()
+    for req in plan_dict.get("requirements", []):
+        valid_ids.add(req["id"])
+        for sub in req.get("sub_requirements", []):
+            valid_ids.add(sub["id"])
+    errors: list[str] = []
+    for task in plan_dict.get("tasks", []):
+        bad = [rid for rid in task.get("requirement_ids", []) if rid not in valid_ids]
+        if bad:
+            errors.append(
+                f"task '{task.get('id', '?')}' references unknown requirement IDs: {bad}"
+            )
+    if errors:
+        raise ValueError(
+            "Plan contains invalid requirement references:\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
 
 _JSON_RULES = [
     "Output ONLY a ```json block — no prose before or after.",
@@ -93,14 +114,30 @@ class PlanValidation(ValidationProcess):
             f"## Plan Under Review\n\n```json\n{plan_json}\n```"
         )
 
+    async def run(
+        self,
+        artifact: Any,
+        on_status: Callable[[str], None] | None = None,
+    ) -> tuple[Any, Any]:
+        _check_requirement_refs(artifact)
+        return await super().run(artifact, on_status)
+
     def _extract_fix(self, result: ValidationResult, raw_output: str) -> dict | None:
         fix = result.proposed_fix
         if isinstance(fix, dict) and fix:
+            try:
+                _check_requirement_refs(fix)
+            except ValueError:
+                return None
             return fix
         if isinstance(fix, str):
             try:
                 parsed = json.loads(fix)
                 if isinstance(parsed, dict) and parsed:
+                    try:
+                        _check_requirement_refs(parsed)
+                    except ValueError:
+                        return None
                     return parsed
             except (json.JSONDecodeError, ValueError):
                 pass

@@ -6,7 +6,7 @@ What we verify:
   - ValidationResult: parse approved/rejected/dict-fix, unknown verdict → rejected, parse failure
   - ValidationProcess.run() loop: approved, retry with fix, exhausts attempts, stops on no fix
   - RequirementsValidation: team composition, lead rules, description, extract_fix
-  - PlanValidation: team composition, lead rules, description, extract_fix
+  - PlanValidation: team composition, lead rules, description, extract_fix, referential integrity
 
 All LLM calls are mocked — no API key needed.
 """
@@ -20,7 +20,7 @@ from aicompany.validation.policy import ValidationPolicy
 from aicompany.validation.result import ValidationResult
 from aicompany.validation.process import ValidationProcess, ValidationError
 from aicompany.validation.requirements_validation import RequirementsValidation
-from aicompany.validation.plan_validation import PlanValidation
+from aicompany.validation.plan_validation import PlanValidation, _check_requirement_refs
 from aicompany.models import Person
 
 
@@ -337,3 +337,120 @@ class TestPlanValidation:
         val = PlanValidation()
         result = ValidationResult(verdict="rejected", proposed_fix=None)
         assert val._extract_fix(result, "") is None
+
+    def test_extract_fix_returns_none_when_fix_has_invalid_refs(self):
+        val = PlanValidation()
+        fix = {
+            "requirements": [{"id": "REQ-001", "title": "Auth", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-999"]}],
+        }
+        result = ValidationResult(verdict="rejected", proposed_fix=fix)
+        assert val._extract_fix(result, "") is None
+
+    def test_extract_fix_accepts_fix_with_valid_refs(self):
+        val = PlanValidation()
+        fix = {
+            "requirements": [{"id": "REQ-001", "title": "Auth", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-001"]}],
+        }
+        result = ValidationResult(verdict="rejected", proposed_fix=fix)
+        assert val._extract_fix(result, "") == fix
+
+
+# ── _check_requirement_refs ────────────────────────────────────────────────────
+
+
+class TestCheckRequirementRefs:
+    def _plan(self, req_ids, task_req_ids):
+        reqs = [{"id": rid, "title": rid, "sub_requirements": []} for rid in req_ids]
+        tasks = [{"id": "t1", "requirement_ids": task_req_ids}]
+        return {"requirements": reqs, "tasks": tasks}
+
+    def test_passes_when_all_refs_valid(self):
+        _check_requirement_refs(self._plan(["REQ-001", "REQ-002"], ["REQ-001"]))
+
+    def test_passes_when_no_requirement_ids_on_task(self):
+        plan = {"requirements": [], "tasks": [{"id": "t1", "requirement_ids": []}]}
+        _check_requirement_refs(plan)
+
+    def test_passes_with_sub_requirement_refs(self):
+        plan = {
+            "requirements": [{
+                "id": "REQ-001", "title": "Auth",
+                "sub_requirements": [{"id": "REQ-001-A", "title": "Login"}],
+            }],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-001-A"]}],
+        }
+        _check_requirement_refs(plan)
+
+    def test_raises_for_unknown_id(self):
+        with pytest.raises(ValueError, match="REQ-999"):
+            _check_requirement_refs(self._plan(["REQ-001"], ["REQ-999"]))
+
+    def test_raises_lists_all_bad_ids(self):
+        plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-999", "REQ-888"]}],
+        }
+        with pytest.raises(ValueError) as exc_info:
+            _check_requirement_refs(plan)
+        msg = str(exc_info.value)
+        assert "REQ-999" in msg
+        assert "REQ-888" in msg
+
+    def test_raises_lists_all_bad_tasks(self):
+        plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [
+                {"id": "t1", "requirement_ids": ["REQ-BAD"]},
+                {"id": "t2", "requirement_ids": ["REQ-BAD2"]},
+            ],
+        }
+        with pytest.raises(ValueError) as exc_info:
+            _check_requirement_refs(plan)
+        msg = str(exc_info.value)
+        assert "t1" in msg
+        assert "t2" in msg
+
+    def test_passes_with_empty_plan(self):
+        _check_requirement_refs({})
+
+    def test_passes_with_no_tasks_key(self):
+        _check_requirement_refs({"requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}]})
+
+
+# ── PlanValidation.run() referential integrity ─────────────────────────────────
+
+
+class TestPlanValidationRequirementRefs:
+    """run() raises ValueError for invalid refs before the AI panel runs."""
+
+    async def test_run_raises_before_ai_when_refs_invalid(self, monkeypatch):
+        bad_plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-GHOST"]}],
+        }
+        called = []
+
+        async def fake_run_pattern(*args, **kwargs):
+            called.append(True)
+            return ""
+
+        monkeypatch.setattr("aicompany.validation.process.run_pattern", fake_run_pattern)
+        with pytest.raises(ValueError, match="REQ-GHOST"):
+            await PlanValidation().run(bad_plan)
+        assert not called, "AI pattern should not be called when refs are structurally invalid"
+
+    async def test_run_succeeds_with_valid_refs(self, monkeypatch, tmp_path):
+        good_plan = {
+            "requirements": [{"id": "REQ-001", "title": "A", "sub_requirements": []}],
+            "tasks": [{"id": "t1", "requirement_ids": ["REQ-001"]}],
+        }
+        verdict_output = '```json\n{"verdict": "approved", "summary": "ok", "issues": [], "suggestions": [], "proposed_fix": null}\n```'
+        monkeypatch.setattr(
+            "aicompany.validation.process.run_pattern",
+            AsyncMock(return_value=verdict_output),
+        )
+        monkeypatch.setattr(config, "COMPANY_DIR", tmp_path)
+        result_plan, _ = await PlanValidation().run(good_plan)
+        assert result_plan == good_plan
