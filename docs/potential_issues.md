@@ -294,26 +294,22 @@ so the final saved tree is always globally consistent.
 
 ---
 
-## Issue 13 — Dedup agents run unrestricted in the project directory
+## Issue 13 — Dedup agents run unrestricted in the project directory ✅ FIXED
 
 **Location**: `aicompany/planning.py` — `Deduplication.run()`
 
-**Description**: Dedup `PersonAgent` instances use `permission_mode="bypassPermissions"` and
-`workspace=proj_root`. They can freely write files anywhere under `proj_root`, including
-`plan.yaml` files. A malfunctioning dedup agent could write directly to plan files, bypassing
-the controlled `_apply_dedup_merges` function.
+**Description**: Dedup agents could write directly to `plan.yaml` files, bypassing
+`_apply_dedup_merges` and silently corrupting the plan tree.
 
-**Impact**: Direct writes to plan files by agents would produce undetectable corruption — the
-YAML may be syntactically valid but semantically broken (wrong IDs, missing fields, duplicate
-tasks).
+**Fix**: Dedup now uses the same file-output pattern as CTO and HR. The lead is instructed
+to write its merge plan to `dedup_plan.json` using the Write tool (not embedded in text
+output). `Deduplication.run()` reads that file after the pattern completes, then cleans it
+up. If the file is missing the run skips gracefully with an `on_status` warning. The intended
+write channel is now explicit and auditable. Any writes agents make to `plan.yaml` files
+directly are still possible but are overwritten by `_apply_dedup_merges`, which remains
+the sole authoritative writer of plan tree changes.
 
-**Design notes for the fix**:
-- Have dedup agents write their merge plan to a dedicated file (e.g. `dedup_plan.json`) in
-  the project root, then `_apply_dedup_merges` reads that file rather than trusting the
-  pattern output string. This doesn't prevent direct writes but makes the intended channel
-  explicit and auditable.
-- Long-term: a read-only permission mode in the SDK would be the correct fix, but that
-  requires upstream changes.
+`dedup_plan.json` added to `.gitignore` alongside `cto_plan.json` and HR temp files.
 
 ---
 

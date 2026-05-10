@@ -618,11 +618,23 @@ class TestDeduplicationValidation:
         registry.create_project_dir("proj_dd", "reqs")
         registry.save_plan(plan)
 
+    def _fake_run_pattern(self, merges_payload: dict):
+        """Return an async mock that writes dedup_plan.json as its side effect."""
+        proj_root = registry.project_dir("proj_dd")
+
+        async def _write_and_return(*args, **kwargs):
+            (proj_root / "dedup_plan.json").write_text(
+                json.dumps(merges_payload), encoding="utf-8"
+            )
+            return ""
+
+        return _write_and_return
+
     async def test_valid_merges_applied(self, sample_state):
         self._setup_project(sample_state)
-        merge_output = '{"merges": [{"keep": "task_001", "remove": ["task_002"]}]}'
+        payload = {"merges": [{"keep": "task_001", "remove": ["task_002"]}]}
 
-        with patch("aicompany.planning.run_pattern", AsyncMock(return_value=merge_output)), \
+        with patch("aicompany.planning.run_pattern", self._fake_run_pattern(payload)), \
              patch("aicompany.planning._apply_dedup_merges") as mock_apply:
             await Deduplication().run("proj_dd", lambda m: None)
 
@@ -632,10 +644,9 @@ class TestDeduplicationValidation:
 
     async def test_invalid_merges_not_applied(self, sample_state):
         self._setup_project(sample_state)
-        # ghost_task does not exist in the plan
-        merge_output = '{"merges": [{"keep": "ghost_task", "remove": ["task_001"]}]}'
+        payload = {"merges": [{"keep": "ghost_task", "remove": ["task_001"]}]}
 
-        with patch("aicompany.planning.run_pattern", AsyncMock(return_value=merge_output)), \
+        with patch("aicompany.planning.run_pattern", self._fake_run_pattern(payload)), \
              patch("aicompany.planning._apply_dedup_merges") as mock_apply:
             await Deduplication().run("proj_dd", lambda m: None)
 
@@ -643,12 +654,12 @@ class TestDeduplicationValidation:
 
     async def test_partially_invalid_applies_only_valid(self, sample_state):
         self._setup_project(sample_state)
-        merge_output = json.dumps({"merges": [
+        payload = {"merges": [
             {"keep": "task_001", "remove": ["task_002"]},   # valid
             {"keep": "ghost",    "remove": ["task_001"]},   # invalid
-        ]})
+        ]}
 
-        with patch("aicompany.planning.run_pattern", AsyncMock(return_value=merge_output)), \
+        with patch("aicompany.planning.run_pattern", self._fake_run_pattern(payload)), \
              patch("aicompany.planning._apply_dedup_merges") as mock_apply:
             await Deduplication().run("proj_dd", lambda m: None)
 
@@ -656,6 +667,30 @@ class TestDeduplicationValidation:
         applied = mock_apply.call_args[0][0]
         assert len(applied) == 1
         assert applied[0]["keep"] == "task_001"
+
+    async def test_missing_file_skips_gracefully(self, sample_state):
+        self._setup_project(sample_state)
+
+        async def _no_file(*args, **kwargs):
+            return ""  # agent wrote nothing
+
+        with patch("aicompany.planning.run_pattern", _no_file), \
+             patch("aicompany.planning._apply_dedup_merges") as mock_apply:
+            messages = []
+            await Deduplication().run("proj_dd", messages.append)
+
+        mock_apply.assert_not_called()
+        assert any("not written" in m for m in messages)
+
+    async def test_no_merges_skips_apply(self, sample_state):
+        self._setup_project(sample_state)
+        payload = {"merges": []}
+
+        with patch("aicompany.planning.run_pattern", self._fake_run_pattern(payload)), \
+             patch("aicompany.planning._apply_dedup_merges") as mock_apply:
+            await Deduplication().run("proj_dd", lambda m: None)
+
+        mock_apply.assert_not_called()
 
 
 # ── Issue 12: global depended_on_by recompute ────────────────────────────────

@@ -492,12 +492,14 @@ _DEDUP_LEAD = Person(
     ),
     knowledge=["software architecture", "dependency graphs"],
     rules=[
-        "Output ONLY a ```json block — no prose before or after.",
+        "Write your analysis as clear Markdown during the review.",
+        "In your FINAL synthesis, write your merge plan to `dedup_plan.json` using the "
+        "Write tool. Do NOT embed JSON in your text output.",
         'The JSON must have exactly one key: "merges" — a list of merge groups.',
         'Each merge group: {"keep": "<deepest_task_id>", "remove": ["<shallower_id>", ...]}',
         "Keep the task at the DEEPEST level among duplicates (deepest in the directory tree).",
         "Remove shallower copies. Their dependents must be redirected to the kept task.",
-        'If no duplicates exist, return {"merges": []}.',
+        'If no duplicates exist, write {"merges": []} to dedup_plan.json.',
     ],
 )
 
@@ -709,6 +711,10 @@ class Deduplication:
     async def run(self, project_id: str, on_status: callable) -> None:
         on_status("Running deduplication review...")
         proj_root = registry.project_dir(project_id)
+        plan_file = proj_root / "dedup_plan.json"
+
+        # Clean up any leftover file from a prior failed run
+        plan_file.unlink(missing_ok=True)
 
         task_desc = (
             f"Project root: {proj_root}/plan.yaml\n\n"
@@ -716,7 +722,7 @@ class Deduplication:
             "Identify semantically duplicate tasks that appear in different branches.\n"
             "For each set of duplicates: keep the DEEPEST one (deepest directory nesting), "
             "remove the shallower copies.\n\n"
-            "Output a JSON merge plan with exactly the structure described in your rules."
+            "Write your merge plan to `dedup_plan.json` as described in your rules."
         )
 
         session = create_session(
@@ -725,7 +731,7 @@ class Deduplication:
             SessionRules(pattern="lead_delegates"),
         )
 
-        raw_output = await run_pattern(
+        await run_pattern(
             pattern_name="lead_delegates",
             session=session,
             lead=_DEDUP_LEAD,
@@ -737,12 +743,18 @@ class Deduplication:
             on_status=on_status,
         )
 
+        if not plan_file.exists():
+            on_status("Deduplication: merge plan file not written — skipping")
+            return
+
         try:
-            merge_plan = _extract_json_block(raw_output)
+            merge_plan = json.loads(plan_file.read_text(encoding="utf-8"))
             merges = merge_plan.get("merges", [])
         except Exception:
             on_status("Deduplication: could not parse merge plan — skipping")
             return
+        finally:
+            plan_file.unlink(missing_ok=True)
 
         if not merges:
             on_status("Deduplication: no duplicates found")

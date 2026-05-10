@@ -22,8 +22,11 @@ workspace/
 reqs*.md
 tmp/
 
-# Temporary CTO plan file written by CTO agent during planning
+# Temporary agent plan files written during planning
 cto_plan.json
+hr_team.json
+hr_team_review.json
+dedup_plan.json
 
 # cloudflared tunnel binary (downloaded, not committed)
 cloudflared
