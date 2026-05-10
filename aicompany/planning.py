@@ -24,12 +24,7 @@ from .validation import RequirementsValidation, PlanValidation, ValidationError
 
 # ── HR system prompt ──────────────────────────────────────────────────────────
 
-_HR_SYSTEM = """\
-You are an HR manager for an AI software company. You design software engineering teams.
-
-Return ONLY a ```json block with exactly this schema — no prose before or after:
-
-```json
+_HR_SCHEMA = """\
 {
   "team": {
     "id": "<team_id>",
@@ -52,15 +47,62 @@ Return ONLY a ```json block with exactly this schema — no prose before or afte
     }
   ],
   "skills": []
-}
+}"""
+
+_HR_SYSTEM = f"""\
+You are an HR manager for an AI software company. You design software engineering teams.
+
+Write your team definition to `hr_team.json` in the current directory using the Write tool.
+The file must contain ONLY valid JSON with this schema:
+
+```json
+{_HR_SCHEMA}
 ```
 
 Rules:
 - Include a lead and at least one coder or reviewer.
 - Roles must be one of: lead, coder, reviewer, tester.
 - IDs are snake_case, unique, descriptive (e.g. be_lead, be_coder_1).
-- Identity must describe the persona clearly so the agent knows how to behave.
-- knowledge and rules shape how the agent thinks — be specific and actionable.
+- Identity: 2-3 sentences in second person. State specific expertise, approach, and style.
+  Good: "You are a senior Go developer who specialises in concurrent systems. You prefer
+  table-driven tests and always benchmark before optimising."
+  Bad: "You are a software developer who writes code."
+- knowledge: at least 3 specific, actionable items per person, relevant to their technology.
+  Good: "Use context.Context as the first arg of every function that may block."
+  Bad: "Write good code."
+- rules: at least 2 behavioral constraints per person. Start with Always, Never, or When.
+  Good: "Always validate input at the boundary before passing it deeper."
+  Bad: "Be helpful."
+"""
+
+_HR_REVIEW_SYSTEM = f"""\
+You are an HR Quality Reviewer. You check team definitions for agent quality before they go live.
+
+You will receive a proposed team definition as JSON. Evaluate every person against these criteria:
+
+Identity:
+- Must be 2-3 sentences in second person ("You are...")
+- Must describe specific expertise, approach, and style — not just a job title
+- Must give the agent a clear sense of how to behave
+
+Knowledge:
+- Must have at least 3 items per person
+- Each item must be specific and actionable — not generic advice
+- Items must match the technology context of the team
+
+Rules:
+- Must have at least 2 items per person
+- Each rule must be a behavioral constraint (starts with Always, Never, When, or similar)
+- Not generic values ("Be helpful", "Write good code")
+
+If the definition meets all criteria, write ONLY {{"verdict": "approved"}} to `hr_team_review.json`.
+
+If it has quality issues, fix them and write the corrected team definition to `hr_team_review.json`.
+The corrected file must use the same schema:
+
+```json
+{_HR_SCHEMA}
+```
 """
 
 
@@ -74,6 +116,22 @@ class PlanResult:
         self.project_id = project_id
         self.plan = plan
         self.created_teams = created_teams
+
+
+async def _sdk_query(prompt: str, system: str, max_turns: int = 3) -> None:
+    """Run a one-shot claude-code-sdk query with bypassPermissions. Side effects via tools."""
+    from claude_code_sdk import query, ClaudeCodeOptions
+
+    async for _ in query(
+        prompt=prompt,
+        options=ClaudeCodeOptions(
+            system_prompt=system,
+            cwd=str(config.BASE_DIR),
+            permission_mode="bypassPermissions",
+            max_turns=max_turns,
+        ),
+    ):
+        pass
 
 
 # ── CTO planning ──────────────────────────────────────────────────────────────
@@ -119,26 +177,47 @@ class CTOPlanning:
 
 class HRTeamCreation:
     async def run(self, team_id: str, tech_context: str) -> dict:
-        from claude_code_sdk import query, ClaudeCodeOptions, AssistantMessage, TextBlock
+        from claude_code_sdk import query, ClaudeCodeOptions
 
-        prompt = (
-            f"Create a software engineering team with id='{team_id}'.\n"
-            f"Technology context: {tech_context}"
-        )
-        text = ""
-        async for msg in query(
-            prompt=prompt,
-            options=ClaudeCodeOptions(
-                system_prompt=_HR_SYSTEM,
-                permission_mode="bypassPermissions",
-                max_turns=3,
+        creation_file = config.BASE_DIR / "hr_team.json"
+        review_file = config.BASE_DIR / "hr_team_review.json"
+        for f in (creation_file, review_file):
+            if f.exists():
+                f.unlink()
+
+        # Step 1: HR creates the team and writes hr_team.json
+        await _sdk_query(
+            prompt=(
+                f"Create a software engineering team with id='{team_id}'.\n"
+                f"Technology context: {tech_context}"
             ),
-        ):
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock) and block.text:
-                        text += block.text
-        return _extract_json_block(text)
+            system=_HR_SYSTEM,
+            max_turns=5,
+        )
+        if not creation_file.exists():
+            raise ValueError(f"HR did not write hr_team.json for team '{team_id}'")
+        proposed = json.loads(creation_file.read_text(encoding="utf-8"))
+
+        # Step 2: HR reviewer checks quality; may write corrected version
+        await _sdk_query(
+            prompt=(
+                f"Review this team definition for team '{team_id}':\n\n"
+                + json.dumps(proposed, indent=2)
+            ),
+            system=_HR_REVIEW_SYSTEM,
+            max_turns=3,
+        )
+
+        result = proposed
+        if review_file.exists():
+            review_data = json.loads(review_file.read_text(encoding="utf-8"))
+            if review_data.get("verdict") != "approved" and "team" in review_data:
+                result = review_data
+
+        for f in (creation_file, review_file):
+            f.unlink(missing_ok=True)
+
+        return result
 
 
 _VALID_PERSON_ROLES = {"lead", "coder", "reviewer", "tester"}

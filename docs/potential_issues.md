@@ -187,27 +187,24 @@ inspect output files directly if they need prior context before deciding.
 
 ---
 
-## Issue 7 — HR-created team data is not structurally validated
+## Issue 7 — HR-created team data is not structurally validated ✅ FIXED
 
-**Location**: `aicompany/planning.py` — `_create_missing_teams()`
+**Location**: `aicompany/planning.py` — `HRTeamCreation`
 
-**Description**: `HRTeamCreation.run()` is a single LLM call with no review loop. The
-result is saved directly to disk. No checks are made for: `lead_id` present in `members`,
-non-empty `members`, valid person `role` values, or ID collisions with existing persons.
+**Description**: `HRTeamCreation.run()` was a single LLM call using the same fragile
+JSON-in-text approach as CTO (Issue 3). No quality review of identity, knowledge, or rules.
 
-**Partial fix**: `_validate_hr_result()` was added (Issue 1 fix) to catch the most dangerous
-structural errors (empty members, invalid lead_id, invalid roles, empty identity). This
-prevents runtime crashes but does not add an AI review loop.
+**Fix**: Two-phase approach using file output throughout:
+1. **Creation**: HR is instructed to write `hr_team.json` using the Write tool (same pattern
+   as CTO/cto_plan.json). The system prompt now includes concrete quality guidance: identities
+   must be 2-3 sentences in second person, knowledge items must be specific and actionable,
+   rules must start with Always/Never/When. HR raises `ValueError` if the file is not written.
+2. **Review**: A second `_sdk_query()` pass (HR Quality Reviewer) receives the proposed team
+   JSON, checks it against the quality criteria, and writes `hr_team_review.json` containing
+   either `{"verdict": "approved"}` (keep proposed) or the corrected team dict (use instead).
 
-**Remaining gap**: Quality issues that structural validation can't catch — incomplete `identity`
-descriptions, missing `knowledge` and `rules` that degrade agent behavior — are not covered.
-
-**Design notes for the full fix**:
-- Convert `HRTeamCreation` to use a `ValidationProcess`-style review: HR proposes a team,
-  a "HR Reviewer" agent checks it against a policy (valid roles, non-empty identities,
-  complete knowledge/rules, no ID conflicts), proposes fixes when rejected.
-- Or simpler: add a second LLM pass that reviews the proposed team definition against a
-  checklist before it's saved to disk.
+Both files are cleaned up after reading. A `_sdk_query` helper centralises the SDK boilerplate.
+`_validate_hr_result` still runs after the review as a final structural guard.
 
 ---
 
