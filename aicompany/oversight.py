@@ -24,26 +24,22 @@ def _rule(title: str = "") -> None:
         print(f"\n{'─' * 60}  {title}")
 
 
-def _display_task(stub: TaskStub, prior_output: str | None) -> None:
-    """Render task details and prior output preview."""
-    _rule(f"  CHECKPOINT — {stub.title}  ")
+def _display_task(stub: TaskStub) -> None:
+    """Render the task awaiting approval."""
+    _rule(f"  CHECKPOINT  ")
     _print()
     if _rich:
+        team_line = f"[dim]Team: {stub.assigned_team}[/dim]\n" if stub.assigned_team else ""
         _console.print(Panel(
-            f"[bold]{stub.title}[/bold]",
+            f"{team_line}[bold]{stub.title}[/bold]",
             title=f"[yellow]Task {stub.id}[/yellow]",
             border_style="yellow",
         ))
     else:
-        print(f"Task: {stub.id} — {stub.title}")
-
-    if prior_output:
-        _rule("  Prior task output (preview)  ")
-        preview = prior_output[:2000]
-        if len(prior_output) > 2000:
-            preview += "\n\n[... truncated ...]"
-        _print(preview)
-        _print()
+        print(f"Task {stub.id} — {stub.title}")
+        if stub.assigned_team:
+            print(f"Team: {stub.assigned_team}")
+    _print()
 
 
 def _prompt_decision() -> str:
@@ -78,12 +74,12 @@ def _collect_modified_instructions() -> str:
     return "\n".join(lines).strip()
 
 
-def checkpoint(stub: TaskStub, prior_output: str | None, project_id: str) -> tuple[str, str]:
+def checkpoint(stub: TaskStub, project_id: str) -> tuple[str, str]:
     """
-    Pause execution, show task context, and ask the user to approve/reject/modify.
+    Pause execution, show the task awaiting approval, and ask the user to approve/reject/modify.
     Returns (action, modified_instructions).
     """
-    _display_task(stub, prior_output)
+    _display_task(stub)
     action = _prompt_decision()
 
     if action == "rejected":

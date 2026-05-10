@@ -69,10 +69,8 @@ def _build_project_context(stub: TaskStub, task_plan: Plan, workspace: Path) -> 
     return "\n".join(lines)
 
 
-def _handle_checkpoint(
-    stub: TaskStub, prior_output: str | None, project_id: str, plan: Plan,
-) -> str:
-    action, modified = oversight.checkpoint(stub, prior_output, project_id)
+def _handle_checkpoint(stub: TaskStub, project_id: str, plan: Plan) -> str:
+    action, modified = oversight.checkpoint(stub, project_id)
     registry.save_decision(project_id, stub.id, {
         "action": action,
         "task_title": stub.title,
@@ -102,7 +100,7 @@ async def _execute_subtask_plan(
             continue
 
         if sub_stub.is_checkpoint:
-            action = _handle_checkpoint(sub_stub, None, project_id, task_plan)
+            action = _handle_checkpoint(sub_stub, project_id, task_plan)
             if action == "rejected":
                 sub_stub.status = "failed"
             registry.update_task_plan(project_id, task_plan.id, task_plan)
@@ -211,7 +209,7 @@ async def run_project(project_id: str, dry_run: bool = False) -> None:
             )
 
         if stub.is_checkpoint and not dry_run:
-            action = _handle_checkpoint(stub, None, project_id, plan)
+            action = _handle_checkpoint(stub, project_id, plan)
             _tlog(stub.id, "CHECKPOINT", f"decision={action}")
             if action == "rejected":
                 stub.status = "failed"

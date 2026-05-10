@@ -174,23 +174,16 @@ directory path.
 
 ---
 
-## Issue 6 — Checkpoint fires with `prior_output=None`
+## Issue 6 — Checkpoint fires with `prior_output=None` ✅ FIXED
 
-**Location**: `aicompany/orchestrator.py` — `run_project()`
+**Location**: `aicompany/orchestrator.py` / `aicompany/oversight.py`
 
-**Description**: `oversight.checkpoint()` accepts a `prior_output: str | None` parameter
-and displays it as a preview when non-None. The call site always passes `None`:
-`_handle_checkpoint(stub, None, project_id, plan)`. The oversight UI infrastructure for
-showing dependency output is complete; the wiring from orchestrator to that UI is missing.
+**Description**: `oversight.checkpoint()` had a `prior_output: str | None` parameter and dead
+code to display it, but it was always passed as `None`. The user never saw meaningful context.
 
-**Impact**: The human approves a checkpoint (e.g. "Deploy to production") without being able
-to see what prior tasks actually produced. Meaningful review is impossible without context.
-
-**Design notes for the fix**:
-- At the checkpoint call site, load the outputs of the stub's `depends_on` tasks:
-  `prior = "\n\n---\n\n".join(filter(None, [registry.load_output(project_id, dep) for dep in stub.depends_on]))`
-- Pass this as `prior_output` to `_handle_checkpoint`.
-- Cap the preview (already done in `_display_task` at 2000 chars).
+**Fix**: Removed `prior_output` entirely — it was dead code. The checkpoint UI now shows the
+task ID, title, and assigned team, followed immediately by the A/R/M prompt. The user can
+inspect output files directly if they need prior context before deciding.
 
 ---
 
