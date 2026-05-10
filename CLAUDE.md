@@ -107,7 +107,7 @@ aicompany/          core package
                     cmd_new_project: inline 50-char length check, then plan_and_create_project (validation embedded).
                     cmd_init: builds state.yaml by scanning committed company/ files (skills, persons, teams).
                               Does NOT write any files — defaults are already in the repo.
-tests/              pytest suite — 248 tests, all mocked (no API key needed).
+tests/              pytest suite — 259 tests, all mocked (no API key needed).
                     Async tests use pytest-asyncio (asyncio_mode=auto in pytest.ini).
                     Pattern/orchestrator tests mock PersonAgent via FakePersonAgent.
                     planning/cli tests patch CTOPlanning, HRTeamCreation, Deduplication, RequirementsValidation, PlanValidation.

@@ -208,26 +208,23 @@ Both files are cleaned up after reading. A `_sdk_query` helper centralises the S
 
 ---
 
-## Issue 8 — Deduplication merge plan not validated before application
+## Issue 8 — Deduplication merge plan not validated before application ✅ FIXED
 
 **Location**: `aicompany/planning.py` — `_apply_dedup_merges()`
 
-**Description**: After the dedup agents produce a merge plan, `_apply_dedup_merges` trusts
-the output completely. If the AI produces a `keep` ID that doesn't exist in the task tree,
-all `depends_on` entries pointing at removed tasks get rewritten to point at a ghost task.
-If `keep` and `remove` are swapped, the deep task's directory is deleted permanently.
+**Description**: `_apply_dedup_merges` trusted the AI's merge plan completely. Hallucinated
+or swapped IDs would corrupt the plan tree with no rollback.
 
-**Impact**: Corrupted plan tree. Orchestrator crashes on `load_task_plan` for any task that
-now depends on a nonexistent node. No rollback.
+**Fix**: Added `_validate_dedup_merges(merges, proj_root, on_status)` that runs before
+`_apply_dedup_merges`. It uses `_collect_known_task_ids` (reads all plan.yaml files via our
+Python API) to enumerate the real task IDs on disk, then filters each merge group:
+- `keep` ID must exist in the tree
+- all `remove` IDs must exist in the tree
+- no `remove` ID may be a `keep` in another group (cascading invalidation)
+- `keep` may not appear in its own `remove` list
 
-**Design notes for the fix**:
-- Before applying any merge: call `registry._find_task_node(proj_root, keep_id)` and verify
-  it exists. If not, skip the merge group and log a warning.
-- Verify that all `remove` IDs also exist.
-- Check that no `keep` ID appears as a `remove` in another merge group (prevents cascading
-  invalidation).
-- Consider writing a plan-tree backup before applying merges (copy all `plan.yaml` files
-  to a `.dedup_backup/` directory) so corrupted merges can be rolled back.
+Invalid groups are skipped with an `on_status` warning. `_apply_dedup_merges` is only called
+if at least one valid group remains.
 
 ---
 

@@ -20,7 +20,10 @@ from aicompany import config, registry
 from aicompany.models import CompanyState, Plan, Requirement, SessionRules, TaskInput, TaskStub, Team, Person
 from aicompany.planning import (
     CTOPlanning,
+    Deduplication,
+    HRTeamCreation,
     _validate_hr_result,
+    _validate_dedup_merges,
     _create_missing_teams,
     _build_task_tree,
 )
@@ -360,3 +363,294 @@ class TestCTOPlanning:
             await CTOPlanning().run("Build something useful.", lambda m: None)
 
         assert seen_at_start == [False], "leftover file should have been deleted before run_pattern"
+
+
+# ── HRTeamCreation — file output + review pass ────────────────────────────────
+
+class TestHRTeamCreation:
+    """HRTeamCreation writes hr_team.json, then runs a quality review pass."""
+
+    def _valid_team(self, team_id="new_team") -> dict:
+        return {
+            "team": {
+                "id": team_id, "name": "New Team", "skills": [],
+                "members": ["nt_lead"], "lead_id": "nt_lead",
+                "communication": {"pattern": "pair_review", "max_rounds": 4},
+            },
+            "persons": [
+                {"id": "nt_lead", "name": "Lead", "role": "lead",
+                 "identity": "You are the lead.", "skills": [],
+                 "knowledge": [], "rules": [], "tools": []},
+            ],
+            "skills": [],
+        }
+
+    def _sdk_query_that_writes_creation(self, team_dict: dict):
+        async def side_effect(prompt, system, max_turns=3):
+            (config.BASE_DIR / "hr_team.json").write_text(
+                json.dumps(team_dict), encoding="utf-8"
+            )
+        return AsyncMock(side_effect=side_effect)
+
+    def _sdk_query_that_approves(self):
+        async def side_effect(prompt, system, max_turns=3):
+            (config.BASE_DIR / "hr_team_review.json").write_text(
+                json.dumps({"verdict": "approved"}), encoding="utf-8"
+            )
+        return AsyncMock(side_effect=side_effect)
+
+    def _sdk_query_that_corrects(self, corrected: dict):
+        async def side_effect(prompt, system, max_turns=3):
+            (config.BASE_DIR / "hr_team_review.json").write_text(
+                json.dumps(corrected), encoding="utf-8"
+            )
+        return AsyncMock(side_effect=side_effect)
+
+    async def test_reads_proposed_team_from_file(self):
+        team = self._valid_team()
+        call_count = [0]
+
+        async def sdk_query(prompt, system, max_turns=3):
+            call_count[0] += 1
+            if call_count[0] == 1:  # creation call
+                (config.BASE_DIR / "hr_team.json").write_text(
+                    json.dumps(team), encoding="utf-8"
+                )
+            else:  # review call
+                (config.BASE_DIR / "hr_team_review.json").write_text(
+                    json.dumps({"verdict": "approved"}), encoding="utf-8"
+                )
+
+        with patch("aicompany.planning._sdk_query", AsyncMock(side_effect=sdk_query)):
+            result = await HRTeamCreation().run("new_team", "python")
+
+        assert result["team"]["id"] == "new_team"
+        assert call_count[0] == 2  # creation + review
+
+    async def test_reviewer_correction_replaces_proposed(self):
+        original = self._valid_team("t1")
+        corrected = self._valid_team("t1")
+        corrected["persons"][0]["identity"] = "You are an improved lead with deep expertise."
+        call_count = [0]
+
+        async def sdk_query(prompt, system, max_turns=3):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                (config.BASE_DIR / "hr_team.json").write_text(
+                    json.dumps(original), encoding="utf-8"
+                )
+            else:
+                (config.BASE_DIR / "hr_team_review.json").write_text(
+                    json.dumps(corrected), encoding="utf-8"
+                )
+
+        with patch("aicompany.planning._sdk_query", AsyncMock(side_effect=sdk_query)):
+            result = await HRTeamCreation().run("t1", "python")
+
+        assert result["persons"][0]["identity"] == "You are an improved lead with deep expertise."
+
+    async def test_reviewer_approval_keeps_proposed(self):
+        team = self._valid_team("t2")
+        call_count = [0]
+
+        async def sdk_query(prompt, system, max_turns=3):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                (config.BASE_DIR / "hr_team.json").write_text(
+                    json.dumps(team), encoding="utf-8"
+                )
+            else:
+                (config.BASE_DIR / "hr_team_review.json").write_text(
+                    json.dumps({"verdict": "approved"}), encoding="utf-8"
+                )
+
+        with patch("aicompany.planning._sdk_query", AsyncMock(side_effect=sdk_query)):
+            result = await HRTeamCreation().run("t2", "python")
+
+        assert result is team or result["team"]["id"] == "t2"
+
+    async def test_raises_if_creation_file_missing(self):
+        async def sdk_query(prompt, system, max_turns=3):
+            pass  # never writes hr_team.json
+
+        with patch("aicompany.planning._sdk_query", AsyncMock(side_effect=sdk_query)):
+            with pytest.raises(ValueError, match="hr_team.json"):
+                await HRTeamCreation().run("missing_team", "python")
+
+    async def test_files_cleaned_up_after_run(self):
+        team = self._valid_team()
+        call_count = [0]
+
+        async def sdk_query(prompt, system, max_turns=3):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                (config.BASE_DIR / "hr_team.json").write_text(
+                    json.dumps(team), encoding="utf-8"
+                )
+            else:
+                (config.BASE_DIR / "hr_team_review.json").write_text(
+                    json.dumps({"verdict": "approved"}), encoding="utf-8"
+                )
+
+        with patch("aicompany.planning._sdk_query", AsyncMock(side_effect=sdk_query)):
+            await HRTeamCreation().run("new_team", "python")
+
+        assert not (config.BASE_DIR / "hr_team.json").exists()
+        assert not (config.BASE_DIR / "hr_team_review.json").exists()
+
+    async def test_leftover_files_removed_before_run(self):
+        (config.BASE_DIR / "hr_team.json").write_text('{"stale": true}', encoding="utf-8")
+        (config.BASE_DIR / "hr_team_review.json").write_text('{"stale": true}', encoding="utf-8")
+        seen_stale = []
+        call_count = [0]
+
+        async def sdk_query(prompt, system, max_turns=3):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                seen_stale.append((config.BASE_DIR / "hr_team.json").exists())
+                (config.BASE_DIR / "hr_team.json").write_text(
+                    json.dumps(self._valid_team()), encoding="utf-8"
+                )
+            else:
+                (config.BASE_DIR / "hr_team_review.json").write_text(
+                    json.dumps({"verdict": "approved"}), encoding="utf-8"
+                )
+
+        with patch("aicompany.planning._sdk_query", AsyncMock(side_effect=sdk_query)):
+            await HRTeamCreation().run("new_team", "python")
+
+        assert seen_stale == [False], "stale hr_team.json should have been removed before creation call"
+
+
+# ── _validate_dedup_merges ────────────────────────────────────────────────────
+
+class TestValidateDedupMerges:
+    """_validate_dedup_merges filters merge groups using on-disk task IDs."""
+
+    def _make_proj(self, task_ids: list[str]) -> Path:
+        """Write a minimal project with one plan.yaml listing the given task IDs."""
+        proj_id = "proj_dedup_val"
+        registry.create_project_dir(proj_id, "reqs")
+        proj_dir = registry.project_dir(proj_id)
+        from aicompany.models import Plan, TaskInput, TaskStub
+        stubs = [
+            TaskStub(id=tid, title=tid, assigned_team="t", depends_on=[],
+                     depended_on_by=[], is_checkpoint=False, status="pending")
+            for tid in task_ids
+        ]
+        plan = Plan(id=proj_id, title="p", input=TaskInput(specification="s"),
+                    requirements=[], tasks=stubs)
+        registry.save_plan(plan)
+        return proj_dir
+
+    def test_valid_merge_passes(self):
+        proj_dir = self._make_proj(["task_001", "task_002"])
+        merges = [{"keep": "task_001", "remove": ["task_002"]}]
+        result = _validate_dedup_merges(merges, proj_dir, lambda m: None)
+        assert len(result) == 1
+        assert result[0]["keep"] == "task_001"
+
+    def test_nonexistent_keep_is_skipped(self):
+        proj_dir = self._make_proj(["task_001"])
+        merges = [{"keep": "ghost_task", "remove": ["task_001"]}]
+        result = _validate_dedup_merges(merges, proj_dir, lambda m: None)
+        assert result == []
+
+    def test_nonexistent_remove_is_skipped(self):
+        proj_dir = self._make_proj(["task_001"])
+        merges = [{"keep": "task_001", "remove": ["ghost_task"]}]
+        result = _validate_dedup_merges(merges, proj_dir, lambda m: None)
+        assert result == []
+
+    def test_remove_id_that_is_keep_elsewhere_is_skipped(self):
+        proj_dir = self._make_proj(["task_001", "task_002", "task_003"])
+        merges = [
+            {"keep": "task_001", "remove": ["task_003"]},
+            {"keep": "task_002", "remove": ["task_001"]},  # task_001 is keep above → conflict
+        ]
+        result = _validate_dedup_merges(merges, proj_dir, lambda m: None)
+        # Only the first group is safe
+        assert len(result) == 1
+        assert result[0]["keep"] == "task_001"
+
+    def test_keep_in_own_remove_list_is_skipped(self):
+        proj_dir = self._make_proj(["task_001", "task_002"])
+        merges = [{"keep": "task_001", "remove": ["task_001", "task_002"]}]
+        result = _validate_dedup_merges(merges, proj_dir, lambda m: None)
+        assert result == []
+
+    def test_mixed_valid_and_invalid_returns_only_valid(self):
+        proj_dir = self._make_proj(["task_001", "task_002", "task_003"])
+        merges = [
+            {"keep": "task_001", "remove": ["task_002"]},        # valid
+            {"keep": "task_001", "remove": ["ghost"]},            # invalid: ghost missing
+        ]
+        result = _validate_dedup_merges(merges, proj_dir, lambda m: None)
+        assert len(result) == 1
+        assert result[0]["remove"] == ["task_002"]
+
+    def test_invalid_merge_calls_on_status(self):
+        proj_dir = self._make_proj(["task_001"])
+        statuses: list[str] = []
+        merges = [{"keep": "ghost", "remove": ["task_001"]}]
+        _validate_dedup_merges(merges, proj_dir, statuses.append)
+        assert any("ghost" in s for s in statuses)
+
+    def test_empty_merges_returns_empty(self):
+        proj_dir = self._make_proj(["task_001"])
+        assert _validate_dedup_merges([], proj_dir, lambda m: None) == []
+
+
+# ── Deduplication.run — validation wired in ──────────────────────────────────
+
+class TestDeduplicationValidation:
+    """Deduplication.run() must call _validate_dedup_merges before _apply_dedup_merges."""
+
+    def _setup_project(self, sample_state):
+        write_state(sample_state)
+        from tests.conftest import write_plan, make_stub
+        from aicompany.models import Plan, TaskInput
+        stubs = [make_stub("task_001"), make_stub("task_002")]
+        plan = Plan(id="proj_dd", title="T", input=TaskInput(specification="s"),
+                    requirements=[], tasks=stubs)
+        registry.create_project_dir("proj_dd", "reqs")
+        registry.save_plan(plan)
+
+    async def test_valid_merges_applied(self, sample_state):
+        self._setup_project(sample_state)
+        merge_output = '{"merges": [{"keep": "task_001", "remove": ["task_002"]}]}'
+
+        with patch("aicompany.planning.run_pattern", AsyncMock(return_value=merge_output)), \
+             patch("aicompany.planning._apply_dedup_merges") as mock_apply:
+            await Deduplication().run("proj_dd", lambda m: None)
+
+        mock_apply.assert_called_once()
+        applied_merges = mock_apply.call_args[0][0]
+        assert applied_merges[0]["keep"] == "task_001"
+
+    async def test_invalid_merges_not_applied(self, sample_state):
+        self._setup_project(sample_state)
+        # ghost_task does not exist in the plan
+        merge_output = '{"merges": [{"keep": "ghost_task", "remove": ["task_001"]}]}'
+
+        with patch("aicompany.planning.run_pattern", AsyncMock(return_value=merge_output)), \
+             patch("aicompany.planning._apply_dedup_merges") as mock_apply:
+            await Deduplication().run("proj_dd", lambda m: None)
+
+        mock_apply.assert_not_called()
+
+    async def test_partially_invalid_applies_only_valid(self, sample_state):
+        self._setup_project(sample_state)
+        merge_output = json.dumps({"merges": [
+            {"keep": "task_001", "remove": ["task_002"]},   # valid
+            {"keep": "ghost",    "remove": ["task_001"]},   # invalid
+        ]})
+
+        with patch("aicompany.planning.run_pattern", AsyncMock(return_value=merge_output)), \
+             patch("aicompany.planning._apply_dedup_merges") as mock_apply:
+            await Deduplication().run("proj_dd", lambda m: None)
+
+        mock_apply.assert_called_once()
+        applied = mock_apply.call_args[0][0]
+        assert len(applied) == 1
+        assert applied[0]["keep"] == "task_001"

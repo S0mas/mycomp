@@ -519,6 +519,70 @@ def _collect_all_plan_paths(project_dir: Path) -> list[Path]:
     return paths
 
 
+def _collect_known_task_ids(proj_root: Path) -> set[str]:
+    """Return all task IDs present in any plan.yaml under the project root."""
+    ids: set[str] = set()
+    for plan_path in _collect_all_plan_paths(proj_root):
+        data = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+        for stub in data.get("tasks", []):
+            if stub.get("id"):
+                ids.add(stub["id"])
+    return ids
+
+
+def _validate_dedup_merges(
+    merges: list[dict], proj_root: Path, on_status: callable,
+) -> list[dict]:
+    """
+    Validate AI-produced merge groups against the actual on-disk task tree.
+
+    Uses our registry traversal to enumerate real task IDs — so hallucinated or
+    swapped IDs are caught before any files are touched.
+    Returns only merge groups that are safe to apply; invalid groups are skipped.
+    """
+    known_ids = _collect_known_task_ids(proj_root)
+    all_keep_ids = {m.get("keep") for m in merges if m.get("keep")}
+
+    valid: list[dict] = []
+    for merge in merges:
+        keep_id = merge.get("keep")
+        remove_ids: list[str] = merge.get("remove", [])
+
+        if not keep_id or not remove_ids:
+            continue
+
+        if keep_id not in known_ids:
+            on_status(f"Deduplication: skipping merge — keep '{keep_id}' not found in task tree")
+            continue
+
+        missing = [rid for rid in remove_ids if rid not in known_ids]
+        if missing:
+            on_status(
+                f"Deduplication: skipping merge (keep='{keep_id}') — "
+                f"remove IDs not found: {missing}"
+            )
+            continue
+
+        # A remove ID that is also a keep in another group would cascade-invalidate it
+        overlap = [rid for rid in remove_ids if rid in all_keep_ids]
+        if overlap:
+            on_status(
+                f"Deduplication: skipping merge (keep='{keep_id}') — "
+                f"remove IDs are keep in another group: {overlap}"
+            )
+            continue
+
+        if keep_id in remove_ids:
+            on_status(
+                f"Deduplication: skipping merge — keep '{keep_id}' appears in its own remove list"
+            )
+            continue
+
+        valid.append(merge)
+
+    return valid
+
+
 def _apply_dedup_merges(merges: list[dict], project_id: str) -> None:
     """Apply AI-produced merge instructions to the on-disk plan tree."""
     if not merges:
@@ -633,6 +697,11 @@ class Deduplication:
 
         if not merges:
             on_status("Deduplication: no duplicates found")
+            return
+
+        merges = _validate_dedup_merges(merges, proj_root, on_status)
+        if not merges:
+            on_status("Deduplication: all proposed merges were invalid — skipping")
             return
 
         on_status(f"Deduplication: applying {len(merges)} merge(s)...")
