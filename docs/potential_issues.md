@@ -278,23 +278,19 @@ Downstream tasks can navigate by heading and know exactly which team produced ea
 
 ---
 
-## Issue 12 — Cross-level `depended_on_by` is inconsistent
+## Issue 12 — Cross-level `depended_on_by` is inconsistent ✅ FIXED
 
 **Location**: `aicompany/planning.py` — `_build_task_tree()`, `_apply_dedup_merges()`
 
-**Description**: `depended_on_by` is computed locally within each `_build_task_tree` call,
-only across siblings at the same tree level. After deduplication, `_apply_dedup_merges`
-recomputes `depended_on_by` per `plan.yaml` file — again, only within each file's own task
-list. Cross-plan-file reverse edges are never tracked.
+**Description**: `depended_on_by` was computed locally within each `_build_task_tree` call
+and per-file inside `_apply_dedup_merges`. Cross-plan-file reverse edges were never tracked.
 
-**Impact**: The "Required by" field shown to teams in task context (`_build_project_context`)
-may be incomplete. Deduplication decisions that create cross-level dependencies leave
-`depended_on_by` permanently stale.
-
-**Design notes for the fix**:
-- After full tree assembly, run a single BFS traversal that builds a global `{task_id: [task_id]}`
-  reverse map, then writes `depended_on_by` into each `plan.yaml` stub in one pass.
-- This global pass should also run after deduplication.
+**Fix**: Added `_recompute_all_depended_on_by(proj_root)` — a two-pass BFS that reads every
+`plan.yaml` in the tree (root + all task subdirs), builds a global reverse map
+`{dep_id: [task_ids that depend on it]}`, then writes correct `depended_on_by` back into
+every file that needs updating. The per-file loop in `_apply_dedup_merges` is replaced with
+a single call to this function. `plan_and_create_project` also calls it after deduplication
+so the final saved tree is always globally consistent.
 
 ---
 

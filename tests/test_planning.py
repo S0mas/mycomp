@@ -24,6 +24,7 @@ from aicompany.planning import (
     HRTeamCreation,
     _validate_hr_result,
     _validate_dedup_merges,
+    _recompute_all_depended_on_by,
     _scope_requirements,
     _create_missing_teams,
     _build_task_tree,
@@ -655,6 +656,99 @@ class TestDeduplicationValidation:
         applied = mock_apply.call_args[0][0]
         assert len(applied) == 1
         assert applied[0]["keep"] == "task_001"
+
+
+# ── Issue 12: global depended_on_by recompute ────────────────────────────────
+
+
+class TestRecomputeAllDependedOnBy:
+    """_recompute_all_depended_on_by updates depended_on_by across all plan.yaml files."""
+
+    def _write_plan_yaml(self, path: Path, plan_id: str, stubs: list[dict]) -> None:
+        import yaml
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.dump({"id": plan_id, "tasks": stubs}, default_flow_style=False),
+            encoding="utf-8",
+        )
+
+    def _read_stubs(self, path: Path) -> dict[str, dict]:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return {s["id"]: s for s in data.get("tasks", [])}
+
+    def test_same_level_dep_computed(self, tmp_path):
+        root = tmp_path / "proj"
+        self._write_plan_yaml(root / "plan.yaml", "proj", [
+            {"id": "t1", "title": "T1", "depends_on": [], "depended_on_by": []},
+            {"id": "t2", "title": "T2", "depends_on": ["t1"], "depended_on_by": []},
+        ])
+        _recompute_all_depended_on_by(root)
+        stubs = self._read_stubs(root / "plan.yaml")
+        assert stubs["t1"]["depended_on_by"] == ["t2"]
+        assert stubs["t2"]["depended_on_by"] == []
+
+    def test_cross_file_dep_computed(self, tmp_path):
+        """A root task depending on a sub-task in another file gets tracked."""
+        root = tmp_path / "proj"
+        # Root plan: t1 depends on sub_001 (which lives in a sub-plan)
+        self._write_plan_yaml(root / "plan.yaml", "proj", [
+            {"id": "t1", "title": "T1", "depends_on": ["sub_001"], "depended_on_by": []},
+        ])
+        # sub_001 is a stub inside t0's sub-plan
+        self._write_plan_yaml(root / "tasks" / "t0" / "plan.yaml", "t0", [
+            {"id": "sub_001", "title": "Sub 1", "depends_on": [], "depended_on_by": []},
+        ])
+        _recompute_all_depended_on_by(root)
+        sub_stubs = self._read_stubs(root / "tasks" / "t0" / "plan.yaml")
+        assert sub_stubs["sub_001"]["depended_on_by"] == ["t1"]
+
+    def test_no_change_when_already_correct(self, tmp_path):
+        root = tmp_path / "proj"
+        self._write_plan_yaml(root / "plan.yaml", "proj", [
+            {"id": "t1", "title": "T1", "depends_on": [], "depended_on_by": ["t2"]},
+            {"id": "t2", "title": "T2", "depends_on": ["t1"], "depended_on_by": []},
+        ])
+        mtime_before = (root / "plan.yaml").stat().st_mtime
+        _recompute_all_depended_on_by(root)
+        # File should not be rewritten when nothing changed
+        mtime_after = (root / "plan.yaml").stat().st_mtime
+        assert mtime_before == mtime_after
+
+    def test_stale_depended_on_by_cleared(self, tmp_path):
+        """A stale reverse edge that no longer matches depends_on is removed."""
+        root = tmp_path / "proj"
+        self._write_plan_yaml(root / "plan.yaml", "proj", [
+            {"id": "t1", "title": "T1", "depends_on": [], "depended_on_by": ["t_ghost"]},
+            {"id": "t2", "title": "T2", "depends_on": [], "depended_on_by": []},
+        ])
+        _recompute_all_depended_on_by(root)
+        stubs = self._read_stubs(root / "plan.yaml")
+        assert stubs["t1"]["depended_on_by"] == []
+
+    def test_multiple_dependents(self, tmp_path):
+        root = tmp_path / "proj"
+        self._write_plan_yaml(root / "plan.yaml", "proj", [
+            {"id": "t1", "title": "T1", "depends_on": [], "depended_on_by": []},
+            {"id": "t2", "title": "T2", "depends_on": ["t1"], "depended_on_by": []},
+            {"id": "t3", "title": "T3", "depends_on": ["t1"], "depended_on_by": []},
+        ])
+        _recompute_all_depended_on_by(root)
+        stubs = self._read_stubs(root / "plan.yaml")
+        assert set(stubs["t1"]["depended_on_by"]) == {"t2", "t3"}
+
+    def test_empty_project_no_error(self, tmp_path):
+        root = tmp_path / "proj"
+        self._write_plan_yaml(root / "plan.yaml", "proj", [])
+        _recompute_all_depended_on_by(root)  # must not raise
+
+    def test_no_tasks_dir_no_error(self, tmp_path):
+        root = tmp_path / "proj"
+        self._write_plan_yaml(root / "plan.yaml", "proj", [
+            {"id": "t1", "title": "T1", "depends_on": [], "depended_on_by": []},
+        ])
+        # No tasks/ subdirectory — should handle gracefully
+        _recompute_all_depended_on_by(root)
 
 
 # ── Issue 9: _scope_requirements warnings ────────────────────────────────────

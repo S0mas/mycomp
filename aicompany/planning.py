@@ -544,6 +544,44 @@ def _collect_all_plan_paths(project_dir: Path) -> list[Path]:
     return paths
 
 
+def _recompute_all_depended_on_by(proj_root: Path) -> None:
+    """Recompute depended_on_by for every stub across the entire plan tree.
+
+    Unlike the per-file pass inside _apply_dedup_merges, this traverses ALL
+    plan.yaml files globally, so cross-file reverse edges (which can appear after
+    deduplication merges a sub-task dependency into a root-level task) are captured.
+    """
+    all_paths = _collect_all_plan_paths(proj_root)
+
+    # Phase 1: build global reverse map {dep_id: [task_ids that list it in depends_on]}
+    reverse: dict[str, list[str]] = {}
+    for plan_path in all_paths:
+        data = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+        for stub in data.get("tasks", []):
+            tid = stub.get("id")
+            if not tid:
+                continue
+            for dep_id in stub.get("depends_on", []):
+                if tid not in reverse.setdefault(dep_id, []):
+                    reverse[dep_id].append(tid)
+
+    # Phase 2: write depended_on_by back into every plan.yaml that needs updating
+    for plan_path in all_paths:
+        data = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+        changed = False
+        for stub in data.get("tasks", []):
+            tid = stub.get("id")
+            if not tid:
+                continue
+            new_dob = reverse.get(tid, [])
+            if stub.get("depended_on_by") != new_dob:
+                stub["depended_on_by"] = new_dob
+                changed = True
+        if changed:
+            with plan_path.open("w", encoding="utf-8") as f:
+                yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+
+
 def _collect_known_task_ids(proj_root: Path) -> set[str]:
     """Return all task IDs present in any plan.yaml under the project root."""
     ids: set[str] = set()
@@ -656,22 +694,8 @@ def _apply_dedup_merges(merges: list[dict], project_id: str) -> None:
                 with plan_path.open("w", encoding="utf-8") as f:
                     yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
-        # Recompute depended_on_by for all affected plans
-        for plan_path in _collect_all_plan_paths(proj_root):
-            with plan_path.open(encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            if not isinstance(data, dict):
-                continue
-            stubs = data.get("tasks", [])
-            id_to_stub = {s["id"]: s for s in stubs}
-            for s in stubs:
-                s["depended_on_by"] = []
-            for s in stubs:
-                for dep_id in s.get("depends_on", []):
-                    if dep_id in id_to_stub:
-                        id_to_stub[dep_id]["depended_on_by"].append(s["id"])
-            with plan_path.open("w", encoding="utf-8") as f:
-                yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+        # Recompute depended_on_by globally (cross-file edges included)
+        _recompute_all_depended_on_by(proj_root)
 
         # Delete removed task directories
         for remove_id in remove_ids:
@@ -781,6 +805,10 @@ async def plan_and_create_project(
 
     # 5. Post-planning deduplication review
     await Deduplication().run(project_id, _status)
+
+    # 6. Global recompute of depended_on_by across all plan files (catches cross-file edges
+    #    that deduplication may have introduced)
+    _recompute_all_depended_on_by(registry.project_dir(project_id))
 
     # Reload plan after deduplication may have modified it
     plan = registry.load_plan(project_id)
