@@ -18,8 +18,12 @@ company/state.yaml
 
 # Runtime project data — generated per project execution
 projects/
+workspace/
 reqs*.md
 tmp/
+
+# Temporary CTO plan file written by CTO agent during planning
+cto_plan.json
 
 # cloudflared tunnel binary (downloaded, not committed)
 cloudflared
