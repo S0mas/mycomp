@@ -328,6 +328,7 @@ async def _build_task_tree(
         return []
 
     stubs: list[TaskStub] = []
+    covered_req_ids: set[str] = set()
 
     for i, raw in enumerate(raw_tasks):
         task_id = raw.get("id", f"task_{i+1:03d}")
@@ -374,9 +375,20 @@ async def _build_task_tree(
             )
         else:
             # Leaf task
-            scoped_reqs = _scope_requirements(
-                parent_requirements, set(raw.get("requirement_ids", []))
-            )
+            req_ids = set(raw.get("requirement_ids", []))
+            scoped_reqs = _scope_requirements(parent_requirements, req_ids)
+
+            if req_ids and not scoped_reqs:
+                on_status(
+                    f"Warning: task '{task_id}' lists requirement_ids {sorted(req_ids)} "
+                    "but none matched any parent requirement — task will run without "
+                    "requirements context."
+                )
+
+            for req in scoped_reqs:
+                covered_req_ids.update(s.id for s in req.sub_requirements)
+                covered_req_ids.add(req.id)
+
             task_plan = Plan(
                 id=task_id,
                 title=f"{title} — plan",
@@ -407,6 +419,19 @@ async def _build_task_tree(
         for dep_id in stub.depends_on:
             if dep_id in id_to_stub:
                 id_to_stub[dep_id].depended_on_by.append(stub.id)
+
+    # Warn about parent requirements that no task claimed
+    if parent_requirements:
+        all_parent_ids: set[str] = set()
+        for req in parent_requirements:
+            all_parent_ids.add(req.id)
+            all_parent_ids.update(s.id for s in req.sub_requirements)
+        uncovered = all_parent_ids - covered_req_ids
+        if uncovered:
+            on_status(
+                f"Warning: {len(uncovered)} requirement(s) not covered by any task at "
+                f"depth {depth}: {sorted(uncovered)}"
+            )
 
     return stubs
 

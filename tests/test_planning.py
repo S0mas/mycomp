@@ -17,13 +17,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aicompany import config, registry
-from aicompany.models import CompanyState, Plan, Requirement, SessionRules, TaskInput, TaskStub, Team, Person
+from aicompany.models import CompanyState, Plan, Requirement, SessionRules, SubRequirement, TaskInput, TaskStub, Team, Person
 from aicompany.planning import (
     CTOPlanning,
     Deduplication,
     HRTeamCreation,
     _validate_hr_result,
     _validate_dedup_merges,
+    _scope_requirements,
     _create_missing_teams,
     _build_task_tree,
 )
@@ -654,3 +655,115 @@ class TestDeduplicationValidation:
         applied = mock_apply.call_args[0][0]
         assert len(applied) == 1
         assert applied[0]["keep"] == "task_001"
+
+
+# ── Issue 9: _scope_requirements warnings ────────────────────────────────────
+
+def _make_req(req_id: str, sub_ids: list[str]) -> Requirement:
+    subs = [
+        SubRequirement(id=sid, parent_id=req_id, title=sid, description="desc")
+        for sid in sub_ids
+    ]
+    return Requirement(id=req_id, title=req_id, description="desc", sub_requirements=subs)
+
+
+class TestScopeRequirementsWarnings:
+    """_build_task_tree warns when requirement_ids dangle or parent reqs go uncovered."""
+
+    def _leaf_raw(self, task_id: str, req_ids: list[str]) -> dict:
+        return {
+            "id": task_id, "title": task_id, "description": "Do something",
+            "assigned_team": "backend_engineer", "depends_on": [],
+            "is_checkpoint": False, "requirement_ids": req_ids, "subtasks": [],
+        }
+
+    async def test_dangling_req_ids_emit_warning(self, sample_state):
+        write_state(sample_state)
+        registry.create_project_dir("proj_dangle", "reqs")
+        proj_dir = registry.project_dir("proj_dangle")
+
+        parent_reqs = [_make_req("REQ-0001", ["REQ-0001-001"])]
+        statuses: list[str] = []
+
+        await _build_task_tree(
+            [self._leaf_raw("task_001", ["REQ-9999"])],  # ID that doesn't exist
+            "proj_dangle", parent_reqs, "", proj_dir, statuses.append,
+        )
+
+        assert any("REQ-9999" in s and "Warning" in s for s in statuses)
+
+    async def test_no_warning_when_req_ids_match(self, sample_state):
+        write_state(sample_state)
+        registry.create_project_dir("proj_ok", "reqs")
+        proj_dir = registry.project_dir("proj_ok")
+
+        parent_reqs = [_make_req("REQ-0001", ["REQ-0001-001"])]
+        statuses: list[str] = []
+
+        await _build_task_tree(
+            [self._leaf_raw("task_001", ["REQ-0001-001"])],
+            "proj_ok", parent_reqs, "", proj_dir, statuses.append,
+        )
+
+        assert not any("Warning" in s and "requirement" in s.lower() for s in statuses)
+
+    async def test_no_warning_when_req_ids_empty(self, sample_state):
+        write_state(sample_state)
+        registry.create_project_dir("proj_empty_ids", "reqs")
+        proj_dir = registry.project_dir("proj_empty_ids")
+
+        parent_reqs = [_make_req("REQ-0001", ["REQ-0001-001"])]
+        statuses: list[str] = []
+
+        # Empty requirement_ids is not a dangling ref — it's just unclaimed
+        await _build_task_tree(
+            [self._leaf_raw("task_001", [])],
+            "proj_empty_ids", parent_reqs, "", proj_dir, statuses.append,
+        )
+
+        # No dangling-ref warning (req_ids was empty)
+        assert not any("lists requirement_ids" in s for s in statuses)
+
+    async def test_uncovered_parent_reqs_emit_warning(self, sample_state):
+        write_state(sample_state)
+        registry.create_project_dir("proj_uncov", "reqs")
+        proj_dir = registry.project_dir("proj_uncov")
+
+        parent_reqs = [_make_req("REQ-0001", ["REQ-0001-001", "REQ-0001-002"])]
+        statuses: list[str] = []
+
+        # task_001 only claims REQ-0001-001; REQ-0001-002 is uncovered
+        await _build_task_tree(
+            [self._leaf_raw("task_001", ["REQ-0001-001"])],
+            "proj_uncov", parent_reqs, "", proj_dir, statuses.append,
+        )
+
+        assert any("REQ-0001-002" in s and "Warning" in s for s in statuses)
+
+    async def test_no_coverage_warning_when_all_covered(self, sample_state):
+        write_state(sample_state)
+        registry.create_project_dir("proj_allcov", "reqs")
+        proj_dir = registry.project_dir("proj_allcov")
+
+        parent_reqs = [_make_req("REQ-0001", ["REQ-0001-001"])]
+        statuses: list[str] = []
+
+        await _build_task_tree(
+            [self._leaf_raw("task_001", ["REQ-0001-001"])],
+            "proj_allcov", parent_reqs, "", proj_dir, statuses.append,
+        )
+
+        assert not any("not covered" in s for s in statuses)
+
+    async def test_no_coverage_warning_when_no_parent_reqs(self, sample_state):
+        write_state(sample_state)
+        registry.create_project_dir("proj_noreqs", "reqs")
+        proj_dir = registry.project_dir("proj_noreqs")
+        statuses: list[str] = []
+
+        await _build_task_tree(
+            [self._leaf_raw("task_001", [])],
+            "proj_noreqs", [], "", proj_dir, statuses.append,
+        )
+
+        assert not any("Warning" in s for s in statuses)

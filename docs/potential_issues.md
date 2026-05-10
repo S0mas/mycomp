@@ -228,23 +228,21 @@ if at least one valid group remains.
 
 ---
 
-## Issue 9 — `_scope_requirements` silently produces empty requirement lists
+## Issue 9 — `_scope_requirements` silently produces empty requirement lists ✅ FIXED
 
-**Location**: `aicompany/planning.py` — `_build_task_tree()` / `_scope_requirements()`
+**Location**: `aicompany/planning.py` — `_build_task_tree()`
 
-**Description**: When a leaf task has empty `requirement_ids`, or IDs that don't match any
-sub-requirement in the parent list, `_scope_requirements` returns `[]` silently. The task
-executes with zero requirements context. No warning is logged.
+**Description**: `_scope_requirements` returned `[]` silently when `requirement_ids` didn't
+match any parent requirement. Tasks executed with zero requirements context.
 
-**Impact**: Teams receive only a task description, with no acceptance criteria. Output quality
-becomes dependent entirely on description richness. This is also a plan policy violation
-(orphaned tasks), but the violation is not surfaced at build time.
+**Fix**: Two `on_status` warnings added inside `_build_task_tree`:
+1. **Dangling ref**: if a leaf task provides non-empty `requirement_ids` but `_scope_requirements`
+   returns nothing, warn with the specific IDs that didn't match.
+2. **Coverage gap**: after the full sibling set is built, compute which parent requirement IDs
+   were never claimed by any leaf task and warn with the uncovered IDs.
 
-**Design notes for the fix**:
-- Log a warning (not an error) when `scoped_reqs` is empty for a task that has
-  `requirement_ids` — this indicates the IDs are dangling references.
-- Add a cross-check after `_build_task_tree` completes: for each requirement ID that exists
-  in `parent_requirements`, verify at least one stub's `task_plan.requirements` covers it.
+Both are warnings (not errors) — planning continues. The coverage tracking uses the scoped
+results already computed in the loop (no extra disk reads).
 
 ---
 
